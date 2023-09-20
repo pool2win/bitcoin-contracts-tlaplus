@@ -4,40 +4,62 @@
 (* Specifications for the HTLC sending and forwarding.  The protocol is    *)
 (* composed of a number of actions like initiate, update, expire.  These   *)
 (* actions collectively specify how the state of each node and the balance *)
-(* on each channel can change.                                             *)
+(* on each channel is allowed to change.                                   *)
 (***************************************************************************)
 
-EXTENDS Integers
+EXTENDS Integers,
+        TLC
+
+CONSTANTS Node, Channel, InitialBalance
 
 (***************************************************************************)
-(* Channel is considered directional in this specification. So <<a, b>> is *)
-(* a channel and so is <<b, a>>                                            *)
+(* Channels are unidirectional in the spec.  This helps us track states    *)
+(* and balances for the purposes of the specifications.                    *)
 (***************************************************************************)
-CONSTANTS Channel, InitialBalance
-
-VARIABLES balance, commit_txs
+VARIABLES channel_states,
+          channel_balances
+          
 -----------------------------------------------------------------------------
 
-vars == <<balance>>
+vars == <<channel_states, channel_balances>>
 
-node_states == {"ready", "pending", "in_latest_commit_tx", "prev_commit_tx_revoked"}
+update_states == {"ready", 
+                  "pending", 
+                  "in_latest_commit_tx", 
+                  "prev_commit_tx_revoked"}
 
+
+(***************************************************************************)
+(* Initialise with an initial balance and ready state                      *)
+(***************************************************************************)
 Init == 
-    /\ \A c \in Channel: balance[c] = CHOOSE b: b \in InitialBalance \* Initialise with any given initial balance
+    /\ channel_balances = [<<m, n>> \in Channel |-> CHOOSE b \in InitialBalance: TRUE]
+    /\ channel_states = [<<m, n>> \in Channel |-> "ready"]
 
-TypeInvariant == 
-    /\ balance \in [Channel -> Int]
-    \* There are no constraints in the protocol on the state of the counterparties states. So all combinations are allowed
-    /\ commit_txs \in [Channel -> node_states \X node_states]
+TypeInvariant ==
+    /\ Channel \in Node \X Node                                 \* channels are between nodes 
+    /\ channel_balances \in [Node \X Node -> InitialBalance]    \* channel balance
+    /\ channel_states \in [Node \X Node -> update_states]       \* channels htlc state
     
 -----------------------------------------------------------------------------
 
 (*
 When invoked on channel <<a, b>>. The commit transaction of b is affected.
 *)
-update_add_htlc(channel, amount) ==
-    /\ commit_txs[channel] = "ready"
-    /\ commit_txs' = [commit_txs EXCEPT ![channel] = "pending"]
+update_add_htlc(m, n, amount) ==
+    /\ channel_states[<<m, n>>] = "ready"    \* Commit tx state should be ready
+    /\ channel_balances[<<m, n>>] > 0        \* Forward only if there is some balance
+    /\ channel_states' = [channel_states EXCEPT ![<<m, n>>] = "pending"] \* Change state to pending
+    /\ UNCHANGED channel_balances
     
+-----------------------------------------------------------------------------
+
+Next ==
+    \/ \exists <<m, n>> \in Channel, a \in InitialBalance:
+            /\ update_add_htlc(m, n, a)
+        
+Spec == 
+    /\ Init
+    /\ [][Next]_<<vars>>
 =============================================================================
 
