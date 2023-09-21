@@ -1,10 +1,10 @@
 -------------------------------- MODULE htlc --------------------------------
 
 (***************************************************************************)
-(* Specifications for the HTLC sending and forwarding.  The protocol is    *)
-(* composed of a number of actions like initiate, update, expire.  These   *)
-(* actions collectively specify how the state of each node and the balance *)
-(* on each channel is allowed to change.                                   *)
+(* Specifications for the HTLC sending and forwarding. The protocol is     *)
+(* composed of actions like initiate, update, expire. These actions        *)
+(* specify how the state of each node and the balance on each channel is   *)
+(* allowed to change in response to handling HTLC messages                 *)
 (***************************************************************************)
 
 EXTENDS Integers,
