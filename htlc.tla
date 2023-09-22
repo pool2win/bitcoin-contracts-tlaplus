@@ -10,7 +10,7 @@
 EXTENDS Integers,
         TLC
 
-CONSTANTS Node, Channel, InitialBalance
+CONSTANTS Node, Channel, ChannelId, InitialBalance
 
 (***************************************************************************)
 (* Channels are unidirectional in the spec.  This helps us track states    *)
@@ -36,46 +36,44 @@ update_states == {"ready",
 (* Initialise channels and htlc with a balance and ready state             *)
 (***************************************************************************)
 Init == 
-    /\ channel_balances = [<<m, n>> \in Channel |-> CHOOSE b \in InitialBalance: TRUE]
-    /\ htlc_balances = [<<m, n>> \in Channel |-> 0]
-    /\ htlc_states = [<<m, n>> \in Channel |-> "ready"]
+    /\ channel_balances = [c \in Channel \X ChannelId |-> CHOOSE b \in InitialBalance: TRUE]
+    /\ htlc_balances = [c \in Channel \X ChannelId |-> 0]
+    /\ htlc_states = [c \in Channel \X ChannelId |-> "ready"]
 
 TypeInvariant ==
-    \* channels are between nodes
-    /\ Channel \in Node \X Node
-    \* channel balance on the sender side. Balance on <<m, n>> notes outstanding htlc balance for m.                                  
-    /\ channel_balances \in [Node \X Node -> InitialBalance]
-    \* outstanding htlc balance on receiver side. Balance on <<m, n>> notes outstanding htlc balance for n    
-    /\ htlc_balances \in [Node \X Node -> InitialBalance]
+    \* channel balance on the sender side. Balance on c notes outstanding htlc balance for m.                                  
+    /\ channel_balances \in [Channel \X ChannelId -> InitialBalance]
+    \* outstanding htlc balance on receiver side. Balance on c notes outstanding htlc balance for n    
+    /\ htlc_balances \in [Channel \X ChannelId -> InitialBalance]
     \* channels htlc state       
-    /\ htlc_states \in [Node \X Node -> update_states]          
+    /\ htlc_states \in [Channel \X ChannelId -> update_states]          
     
 -----------------------------------------------------------------------------
 
-(*
-When invoked on channel <<a, b>>. The commit transaction of b is affected.
-We simply track the outstanding htlc balance and don't model the entire commit
-transaction. 
-*)
-update_add_htlc(m, n, amount) ==
+(***************************************************************************)
+(* When invoked on channel <<a, b>>.  The commit transaction of b is       *)
+(* affected.  We simply track the outstanding htlc balance and don't model *)
+(* the entire commit transaction.                                          *)
+(***************************************************************************)
+update_add_htlc(c, amount) ==
      \* Commit tx state can be in any of these states
-    /\ htlc_states[<<m, n>>] \in {"ready", "in_latest_commit_tx"}
+    /\ htlc_states[c] \in {"ready", "in_latest_commit_tx"}
      \* Update only if amount is more than zero
     /\ amount > 0
      \* Update only if there is sufficient balance
-    /\ channel_balances[<<m, n>>] - amount >= 0
+    /\ channel_balances[c] - amount >= 0
      \* Change htlc balance in the commit transaction
-    /\ htlc_balances' = [htlc_balances EXCEPT ![<<m, n>>] = @ + amount]
+    /\ htlc_balances' = [htlc_balances EXCEPT ![c] = @ + amount]
      \* Change channel balance in the commit transaction for sender        
-    /\ channel_balances' = [channel_balances EXCEPT ![<<m, n>>] = @ - amount]
+    /\ channel_balances' = [channel_balances EXCEPT ![c] = @ - amount]
      \* Keep receiving updates until sender has exhausted channel sender's balance
-    /\ htlc_states' = [htlc_states EXCEPT ![<<m, n>>] = "in_latest_commit_tx"]
-    
+    /\ htlc_states' = [htlc_states EXCEPT ![c] = "in_latest_commit_tx"]
+
 -----------------------------------------------------------------------------
 
 Next ==
-    \/ \exists <<m, n>> \in Channel, a \in InitialBalance:
-            /\ update_add_htlc(m, n, a)
+    \/ \exists c \in Channel \X ChannelId, a \in InitialBalance:
+            /\ update_add_htlc(c, a)
         
 Spec == 
     /\ Init
