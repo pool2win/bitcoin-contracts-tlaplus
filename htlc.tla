@@ -16,12 +16,12 @@ CONSTANTS Node, Channel, InitialBalance
 (* Channels are unidirectional in the spec.  This helps us track states    *)
 (* and balances for the purposes of the specifications.                    *)
 (***************************************************************************)
-VARIABLES channel_states,
+VARIABLES htcl_states,
           channel_balances
           
 -----------------------------------------------------------------------------
 
-vars == <<channel_states, channel_balances>>
+vars == <<htcl_states, channel_balances>>
 
 update_states == {"ready", 
                   "pending", 
@@ -34,12 +34,12 @@ update_states == {"ready",
 (***************************************************************************)
 Init == 
     /\ channel_balances = [<<m, n>> \in Channel |-> CHOOSE b \in InitialBalance: TRUE]
-    /\ channel_states = [<<m, n>> \in Channel |-> "ready"]
+    /\ htcl_states = [<<m, n>> \in Channel |-> "ready"]
 
 TypeInvariant ==
     /\ Channel \in Node \X Node                                 \* channels are between nodes 
     /\ channel_balances \in [Node \X Node -> InitialBalance]    \* channel balance
-    /\ channel_states \in [Node \X Node -> update_states]       \* channels htlc state
+    /\ htcl_states \in [Node \X Node -> update_states]       \* channels htlc state
     
 -----------------------------------------------------------------------------
 
@@ -47,9 +47,9 @@ TypeInvariant ==
 When invoked on channel <<a, b>>. The commit transaction of b is affected.
 *)
 update_add_htlc(m, n, amount) ==
-    /\ channel_states[<<m, n>>] = "ready"    \* Commit tx state should be ready
+    /\ htcl_states[<<m, n>>] = "ready"    \* Commit tx state should be ready
     /\ channel_balances[<<m, n>>] > 0        \* Forward only if there is some balance
-    /\ channel_states' = [channel_states EXCEPT ![<<m, n>>] = "pending"] \* Change state to pending
+    /\ htcl_states' = [htcl_states EXCEPT ![<<m, n>>] = "pending"] \* Change state to pending
     /\ UNCHANGED channel_balances
     
 -----------------------------------------------------------------------------
