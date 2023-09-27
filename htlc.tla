@@ -51,9 +51,9 @@ TypeInvariant ==
 -----------------------------------------------------------------------------
 
 (***************************************************************************)
-(* When invoked on channel <<a, b>>.  The commit transaction of b is       *)
-(* affected.  We simply track the outstanding htlc balance and don't model *)
-(* the entire commit transaction.                                          *)
+(* When invoked on channel <<a, b, id>>.  The commit transaction of b is   *)
+(* affected.  We simply track the outstanding htlc and channel balance and *)
+(* don't model the entire commit transaction.                              *)
 (***************************************************************************)
 update_add_htlc(c, amount) ==
      \* Commit tx state can be in any of these states
@@ -69,11 +69,31 @@ update_add_htlc(c, amount) ==
      \* Keep receiving updates until sender has exhausted channel sender's balance
     /\ htlc_states' = [htlc_states EXCEPT ![c] = "in_latest_commit_tx"]
 
+(*
+Commit all the updates received so far for a channel. 
+Moves the channel htlc to the next state - prev_commit_tx_revoked.
+*)
+commitment_signed(c) ==
+    /\ htlc_states[c] \in {"in_latest_commit_tx"}
+    /\ htlc_states' = [htlc_states EXCEPT ![c] = "prev_commit_tx_revoked"]
+    /\ UNCHANGED <<channel_balances, htlc_balances>>
+
+(*
+In a channel <<m, n>> once n received commitment_signed from m
+and moved the htlc to prev_commit_tx_revoked. This action updates the state
+at m.
+*)
+revoke_and_ack(c) ==
+    \* Update the state at n, the receiver end of the unidirectional channel
+    /\ htlc_states[<<c[1], c[0], c[2]>>] \in {"prev_commit_tx_revoked"}
+    /\ UNCHANGED <<channel_balances, htlc_balances>>
+
 -----------------------------------------------------------------------------
 
 Next ==
-    \/ \exists c \in Channel \X ChannelId, a \in InitialBalance:
-            /\ update_add_htlc(c, a)
+    \/ \exists c \in Channel \X ChannelId:
+        \/ \exists a \in InitialBalance: update_add_htlc(c, a)
+        \/ commitment_signed(c)    
         
 Spec == 
     /\ Init
