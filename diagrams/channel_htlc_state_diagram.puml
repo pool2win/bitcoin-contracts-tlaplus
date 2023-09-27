@@ -1,0 +1,39 @@
+@startuml
+
+hide empty description
+
+state NoHTLC
+NoHTLC : Initial commitment transaction without an HTLC
+NoHTLC: <<empty list of htlcs>>
+
+state update_add_htlc <<choice>>
+
+state Pending
+Pending: HTLC sent and awaiting commitment from counterparty
+
+state Added
+Added: HTLCs received and awaiting commitment from counterparty
+
+[*] --> NoHTLC
+
+NoHTLC --> update_add_htlc 
+
+update_add_htlc --> Pending : send update_add_htlc
+update_add_htlc --> Added : receive update_add_htlc
+
+state CommitmentSigned
+CommitmentSigned: Includes commitment from counterparty
+
+Added --> CommitmentSigned : received commitment_signed
+
+Pending --> Added : receive revoke_and_ack
+
+state PendingRemove
+
+CommitmentSigned --> PendingRemove: receive update_fulfill_htlc
+CommitmentSigned --> PendingRemove: receive update_fail_htlc
+CommitmentSigned --> PendingRemove: receive update_fail_malformed_htlc
+
+PendingRemove --> Removed: receive revoke_and_ack
+
+@enduml
