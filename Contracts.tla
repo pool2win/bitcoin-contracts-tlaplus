@@ -10,6 +10,11 @@
 (* The state of the commitment transaction changes in reponse to the       *)
 (* various actions like supercede, spend, revoke etc are taken.            *)
 (*                                                                         *)
+(* We also do not deal with the communication protocol between nodes for   *)
+(* creating and updating commitment transactions.  This spec only focusses *)
+(* on the various commitment transaction created, revoked, spent to open,  *)
+(* close, force close or penalise.                                         *)
+(*                                                                         *)
 (* We ignore the details of how transactions are signed and just mark      *)
 (* transactions as signed.  This lets us focus on the specifying the       *)
 (* behaviour of the commitment transactions without dealing with lower     *)
@@ -37,7 +42,7 @@ CONSTANTS
 (***************************************************************************)
 (* Set of all keys                                                         *)
 (***************************************************************************)
-Key == \A p \in Party, k \in 0..NumKey - 1: <<p, k>>
+Key == {<<p, k>>: p \in Party, k \in 0..NumKey - 1}
 
 (***************************************************************************)
 (* Value to capture missing CSV in output                                  *)
@@ -47,19 +52,19 @@ NoCSV == CHOOSE c : c \notin 0..CSV
 (***************************************************************************)
 (* Multisig outputs without CSV encumberance                               *)
 (***************************************************************************)
-MultiSigOutput == \A a, b \in Party \X Party: <<a, b, NoCSV>>
+MultiSig == Party \X Party \X {NoCSV}
 
 (***************************************************************************)
 (* Multisig outputs with CSV encumberance                                  *)
 (***************************************************************************)
-MultiSigWithCSVOutput == \A a, b \in Party \X Party: <<a, b, CSV>>
+MultiSigWithCSV == Party \X Party \X {CSV}
 
 (***************************************************************************)
 (* P2PKH outputs, without encumbrance                                      *)
 (***************************************************************************)
 P2PKH == Key
 
-AllOutput == MultiSigOutput \cup MultiSigWithCSVOutput \cup P2PKH
+AllOutput == MultiSig \cup MultiSigWithCSV \cup P2PKH
 
 NoOutput == CHOOSE o : o \notin AllOutput
 
@@ -70,39 +75,66 @@ NoOutput == CHOOSE o : o \notin AllOutput
 (* signature by a key on a tx, it is assumed it is correctly signed as per *)
 (* bitcoin's requirements                                                  *)
 (***************************************************************************)
-Sig == \A p \in Party, k \in 0..NumKey - 1: <<p, k>>
+Sig == {<<p, k>>: p \in Party, k \in 0..NumKey - 1}
 
 (***************************************************************************)
 (* Value to capture unsigned transactions                                  *)
 (***************************************************************************)
 NoSig == CHOOSE s : s \notin Sig
 
-(***************************************************************************)
-(* Define the commitment tx type.  We don't have HTLCs yet.  We also don't *)
-(* filter outputs to the party here.  We leave that for actions, or we'll  *)
-(* add the filter when needed.                                             *)
-(*                                                                         *)
-(* Commitment transactions are different for different parties and that is *)
-(* captured in commitment_txs.  The Party here is simply to make it easier *)
-(* to know immediately which is the local party.                           *)
-(***************************************************************************)
-CommitmentTx == [
-                    outputs |-> Seq(AllOutput),
-                    local_sig |-> Sig \cup NoSig,
-                    remote_sig |-> Sig \cup NoSig
-                ]
-
-
-VARIABLES
-    commitment_txs     \* The set of all commiment transactions for both parties
-
-vars == <<commitment_txs>>
 -----------------------------------------------------------------------------
 
+VARIABLES
+    outputs,     \* The set of all commiment transactions for both parties
+    local_sigs,
+    remote_sigs
+
+vars == <<outputs, local_sigs, remote_sigs>>
+
 Init ==
-    /\ commitment_txs = \A p \in Party: [p -> <<>>]
+    /\ outputs = [p \in Party |-> <<>>]
+    /\ local_sigs = [p \in Party |-> NoSig]
+    /\ remote_sigs = [p \in Party |-> NoSig]
 
+(***************************************************************************)
+(* We don't define transactions using a function because using variables   *)
+(* as functions become hard to work with in TLA+                           *)
+(***************************************************************************)
 TypeInvariant ==
-    /\ commitment_txs \in [Party -> Seq(CommitmentTx)]
+        /\ outputs \in [Party -> Seq(AllOutput)]
+        /\ local_sigs \in [Party -> Sig \cup {NoSig}]
+        /\ remote_sigs \in [Party -> Sig \cup {NoSig}]
 
+-----------------------------------------------------------------------------
+
+(***************************************************************************)
+(* Helper function to get other party                                      *)
+(***************************************************************************)
+OtherParty(party) == CHOOSE p \in Party: p # party
+
+(***************************************************************************)
+(* Create first commitment transactions for given parties                  *)
+(***************************************************************************)
+CreateFirstCommitmentTx(party) ==
+        /\ outputs[party] = <<>>
+        /\ outputs' = [outputs EXCEPT ![party] =
+                                @ \o <<<<party, OtherParty(party), CSV>>,
+                                       <<OtherParty(party), 0>>>>]
+        /\ local_sigs' = [local_sigs EXCEPT ![party] = <<party, 0>>]
+        /\ remote_sigs' = [remote_sigs EXCEPT ![party] = <<OtherParty(party), 0>>]
+
+(***************************************************************************)
+(* Party p spends their commitment transaction.                            *)
+(*                                                                         *)
+(* If the tx is the latest commitment transaction it is succesfuly spend.  *)
+(*                                                                         *)
+(* If not, ti gives the other party a chance to spend the breach remedy    *)
+(* tx.                                                                     *)
+(***************************************************************************)
+\* SpendCommitmentTx(p, tx)
+
+Next ==
+    \/ \exists p \in Party: CreateFirstCommitmentTx(p)
+
+Spec == Init /\ [][Next]_<<vars>>
 =============================================================================
