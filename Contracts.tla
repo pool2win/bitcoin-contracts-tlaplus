@@ -1,5 +1,21 @@
 ----------------------------- MODULE Contracts -----------------------------
 
+(***************************************************************************)
+(* This spec captures the behaviour of commitment transactions on the two  *)
+(* sides of a Lightning channel.                                           *)
+(*                                                                         *)
+(* We model the various kinds of outputs a commitment transactions will    *)
+(* have over its lifetime.                                                 *)
+(*                                                                         *)
+(* The state of the commitment transaction changes in reponse to the       *)
+(* various actions like supercede, spend, revoke etc are taken.            *)
+(*                                                                         *)
+(* We ignore the details of how transactions are signed and just mark      *)
+(* transactions as signed.  This lets us focus on the specifying the       *)
+(* behaviour of the commitment transactions without dealing with lower     *)
+(* level complexities.                                                     *)
+(***************************************************************************)
+
 EXTENDS Integers,
         TLC,
         Sequences
