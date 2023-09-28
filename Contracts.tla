@@ -65,9 +65,12 @@ NoSig == CHOOSE s : s \notin Sig
 (* Define the commitment tx type.  We don't have HTLCs yet.  We also don't *)
 (* filter outputs to the party here.  We leave that for actions, or we'll  *)
 (* add the filter when needed.                                             *)
+(*                                                                         *)
+(* Commitment transactions are different for different parties and that is *)
+(* captured in commitment_txs.  The Party here is simply to make it easier *)
+(* to know immediately which is the local party.                           *)
 (***************************************************************************)
 CommitmentTx == [
-                    party |-> Party,
                     outputs |-> Seq(AllOutput),
                     local_sig |-> Sig \cup NoSig,
                     remote_sig |-> Sig \cup NoSig
@@ -84,6 +87,6 @@ Init ==
     /\ commitment_txs = \A p \in Party: [p -> <<>>]
 
 TypeInvariant ==
-    /\ commitment_txs \in CommitmentTx
+    /\ commitment_txs \in [Party -> Seq(CommitmentTx)]
 
 =============================================================================
