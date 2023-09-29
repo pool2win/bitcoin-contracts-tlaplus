@@ -8,17 +8,22 @@
 (* have over its lifetime.                                                 *)
 (*                                                                         *)
 (* The state of the commitment transaction changes in reponse to the       *)
-(* various actions like supercede, spend, revoke etc are taken.            *)
+(* various actions like supersede, publish, etc are taken by parties.      *)
 (*                                                                         *)
 (* We also do not deal with the communication protocol between nodes for   *)
-(* creating and updating commitment transactions.  This spec only focusses *)
-(* on the various commitment transaction created, revoked, spent to open,  *)
-(* close, force close or penalise.                                         *)
+(* creating and updating commitment transactions.  This spec will only     *)
+(* focusses on the various commitment transaction and their lifecycle in   *)
+(* response to interaction between parties and the blockchain.             *)
 (*                                                                         *)
 (* We ignore the details of how transactions are signed and just mark      *)
 (* transactions as signed.  This lets us focus on the specifying the       *)
 (* behaviour of the commitment transactions without dealing with lower     *)
 (* level complexities.                                                     *)
+(*                                                                         *)
+(* TODO: We don't track balances yet.  Need to do that and don't go into   *)
+(* certain states depending on the balance checks                          *)
+(*                                                                         *)
+(* TODO: Add HTLCs! Now that will be fun!                                  *)
 (***************************************************************************)
 
 EXTENDS Integers,
@@ -31,32 +36,6 @@ CONSTANTS
     Height,     \* The height up to which we run the spec
     NumTxs      \* The number of commitment txs we want
 
------------------------------------------------------------------------------
-(***************************************************************************)
-(* Sequences utility                                                       *)
-(***************************************************************************)
-
-SeqOf(set, n) ==
-  (***************************************************************************)
-  (* All sequences up to length n with all elements in set.  Includes empty  *)
-  (* sequence.                                                               *)
-  (***************************************************************************)
-  UNION {[1..m -> set] : m \in 0..n}
-
-ToSet(s) ==
-  (*************************************************************************)
-  (* The image of the given sequence s. Cardinality(ToSet(s)) <= Len(s)    *)
-  (* see https://en.wikipedia.org/wiki/Image_(mathematics)                 *)
-  (*************************************************************************)
-  { s[i] : i \in DOMAIN s }
-
-Contains(s, e) ==
-  (**************************************************************************)
-  (* TRUE iff the element e \in ToSet(s).                                   *)
-  (**************************************************************************)
-  \E i \in 1..Len(s) : s[i] = e
-
-Last(s) == s[Len(s)]
 -----------------------------------------------------------------------------
 
 (***************************************************************************)
@@ -96,7 +75,7 @@ P2PKH == Key
 
 (***************************************************************************)
 (* Set of all signatures for all commit txs.  The signature in real world  *)
-(* is related to the commit transaction, however, leave out this           *)
+(* is related to the commit transaction.  However, we leave out this       *)
 (* complication of how the signature is generated.  If there is a          *)
 (* signature by a key on a tx, it is assumed it is correctly signed as per *)
 (* bitcoin's requirements                                                  *)
@@ -112,6 +91,9 @@ CT == [index |-> 0..NumTxs,
        multisig |-> MultiSigWithCSV, pk |-> P2PKH,
        local_sig |-> Sig \cup {NoSig},
        remote_sig |-> Sig \cup {NoSig}]
+
+PublishId == {<<p, i, h>>: p \in Party, i \in 0..NumTxs, h \in 0..Height}      
+NoSpend == <<>>
 -----------------------------------------------------------------------------
 
 VARIABLES
@@ -119,15 +101,21 @@ VARIABLES
     bob_cts,        \* Commitment tx for bob
     alice_brs,      \* Breach remedy transactions for alice
     bob_brs,        \* Breach remedy transactions for bob
-    funding_spent   \* Is funding tx spent (we'll add spending txid later)
+    mempool_ct,     \* The CT that has been broadcasted. 
+                    \* TODO: Turn into Seq. More than one can be in mempool.
+    published_ct    \* The CT that has been included in a block and confirmed.
+       
 
-vars == <<alice_cts, bob_cts, alice_brs, bob_brs, funding_spent>>
+vars == <<alice_cts, bob_cts, alice_brs, bob_brs, mempool_ct, published_ct>>
 
 (***************************************************************************)
 (* Helper function to get other party                                      *)
 (***************************************************************************)
 OtherParty(party) == CHOOSE p \in Party: p # party
 
+(***************************************************************************)
+(* Create a commitment transaction given the party, index and key to use.  *)
+(***************************************************************************)
 CreateCT(party, index, key_num) ==
         [index |-> index,
          multisig |-> <<party, OtherParty(party), CSV>>,
@@ -140,12 +128,9 @@ Init ==
     /\ bob_cts = {CreateCT("bob", 0, 0)}
     /\ alice_brs = {}
     /\ bob_brs = {}
-    /\ funding_spent = FALSE
+    /\ mempool_ct = NoSpend
+    /\ published_ct = NoSpend
 
-(***************************************************************************)
-(* We don't define transactions using a function because using variables   *)
-(* as functions become hard to work with in TLA+                           *)
-(***************************************************************************)
 TypeInvariant ==
         /\ \A ct \in alice_cts \cup bob_cts:
             /\ ct.index \in 0..NumTxs
@@ -156,7 +141,8 @@ TypeInvariant ==
         /\ \A br \in alice_brs \cup bob_brs:
             /\ br.index \in 0..NumTxs
             /\ br.pk \in P2PKH
-        /\ funding_spent \in BOOLEAN
+        /\ mempool_ct \in PublishId \cup {NoSpend}
+        /\ published_ct \in PublishId \cup {NoSpend}
 
 -----------------------------------------------------------------------------
 
@@ -169,7 +155,8 @@ MaxIndex(party_cts) ==
 (* Breach remedy transactions are pre-signed transactions instead of they  *)
 (* private key being sent over to the other party.                         *)
 (***************************************************************************)
-SupercedeCommitmentTx(index) ==
+SupersedeCommitmentTx(index) ==
+    /\ mempool_ct # NoSpend      \* Stop creating new CTs once FT is spent
     /\
         LET key_index == 1
         IN
@@ -179,7 +166,7 @@ SupercedeCommitmentTx(index) ==
             /\ bob_cts' = bob_cts \cup {CreateCT("bob", index, key_index)}
             /\ alice_brs' = alice_brs \cup {[index |-> index, pk |-> <<"bob", key_index>>]}
             /\ bob_brs' = bob_brs \cup {[index |-> index, pk |-> <<"alice", key_index>>]}
-    /\ UNCHANGED <<funding_spent>>
+    /\ UNCHANGED <<mempool_ct, published_ct>>
 
 (***************************************************************************)
 (* Publish a commitment transaction to the blockchain.  The commitment is  *)
@@ -191,26 +178,40 @@ SupercedeCommitmentTx(index) ==
 (* If not, it gives the other party a chance to spend the breach remedy    *)
 (* tx.                                                                     *)
 (*                                                                         *)
-(* TODO: Use Party -> cts function so we can merge these two actions.      *)
-(* TODO: Track which CT is spent and also the output spent.                *)
+(* TODO: We only spec CSV (self) commitment transaction. We need to handle *)
+(* the non-CSV output being published and co-op closes.                    *)
 (***************************************************************************)
-AlicePublishCommitmentWithoutPenalty(index) ==
-    /\ funding_spent = FALSE
-    /\ index = MaxIndex(alice_cts)      \* Spend latest CT
-    /\ funding_spent' = TRUE
-    /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs>>
+PublishCommitment(party, index, height) ==
+    /\ mempool_ct = NoSpend
+    /\ mempool_ct' = <<party, index, height>>
+    /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs, published_ct>>
 
-BobPublishCommitmentWithoutPenalty(index) ==
-    /\ funding_spent = FALSE
-    /\ index = MaxIndex(bob_cts)        \* Spend latest CT
-    /\ funding_spent' = TRUE
-    /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs>>
-    
+(***************************************************************************)
+(* Publish a breach remedy transaction in response to a commitment         *)
+(* transaction.                                                            *)
+(*                                                                         *)
+(* This tx is immediately published on chain.                              *)
+(*                                                                         *)
+(* TODO: We skip the BR going through the mempool and confirm it           *)
+(* immeidiately.  This can be improved too.                                *)
+(***************************************************************************)   
+PublishBR(party, index, height) ==
+    LET cts == IF party = "alice" THEN alice_cts ELSE bob_cts
+    IN
+        /\ published_ct = NoSpend                   \* No CT is confirmed on chain yet
+        /\ mempool_ct # NoSpend                     \* Only if some CT has been published
+        /\ mempool_ct[1] = OtherParty(party)        \* CT was published by the other party
+        /\ mempool_ct[2] < MaxIndex(cts)            \* Revoked CT was published
+        /\ mempool_ct[2] = index                    \* We need to use the BR from the same index
+        /\ height - mempool_ct[2] < CSV             \* Can only publish BR if CSV hasn't expired
+        /\ published_ct' = <<party, index, height>>  \* TODO: Pick the appropriate party's BRS
+    /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs, mempool_ct>>
+
+ 
 Next ==
-    \/ \E index \in 0..NumTxs: SupercedeCommitmentTx(index)
-    \/ \E index \in 0..NumTxs: AlicePublishCommitmentWithoutPenalty(index)
-    \/ \E index \in 0..NumTxs: BobPublishCommitmentWithoutPenalty(index)
-    \/ \E index \in 0..NumTxs: AlicePublishCommitmentWithoutPenalty(index)
+    \/ \E i \in 0..NumTxs: SupersedeCommitmentTx(i)
+    \/ \E i \in 0..NumTxs, p \in Party, h \in 0..Height: PublishCommitment(p, i, h)
+    \/ \E i \in 0..NumTxs, p \in Party, h \in 0..Height: PublishBR(p, i, h)
 
     
     
