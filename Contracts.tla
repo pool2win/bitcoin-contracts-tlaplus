@@ -112,16 +112,16 @@ CT == [index |-> 0..NumTxs,
        multisig |-> MultiSigWithCSV, pk |-> P2PKH,
        local_sig |-> Sig \cup {NoSig},
        remote_sig |-> Sig \cup {NoSig}]
-
 -----------------------------------------------------------------------------
 
 VARIABLES
     alice_cts,      \* Commitment tx for alice
     bob_cts,        \* Commitment tx for bob
     alice_brs,      \* Breach remedy transactions for alice
-    bob_brs         \* Breach remedy transactions for bob
+    bob_brs,        \* Breach remedy transactions for bob
+    funding_spent   \* Is funding tx spent (we'll add spending txid later)
 
-vars == <<alice_cts, bob_cts, alice_brs, bob_brs>>
+vars == <<alice_cts, bob_cts, alice_brs, bob_brs, funding_spent>>
 
 (***************************************************************************)
 (* Helper function to get other party                                      *)
@@ -140,6 +140,7 @@ Init ==
     /\ bob_cts = {CreateCT("bob", 0, 0)}
     /\ alice_brs = {}
     /\ bob_brs = {}
+    /\ funding_spent = FALSE
 
 (***************************************************************************)
 (* We don't define transactions using a function because using variables   *)
@@ -155,8 +156,12 @@ TypeInvariant ==
         /\ \A br \in alice_brs \cup bob_brs:
             /\ br.index \in 0..NumTxs
             /\ br.pk \in P2PKH
+        /\ funding_spent \in BOOLEAN
 
 -----------------------------------------------------------------------------
+
+MaxIndex(party_cts) ==
+    (CHOOSE x \in party_cts: \A y \in party_cts: x.index >= y.index).index
 
 (***************************************************************************)
 (* Create first commitment transactions for given parties                  *)
@@ -165,15 +170,16 @@ TypeInvariant ==
 (* private key being sent over to the other party.                         *)
 (***************************************************************************)
 SupercedeCommitmentTx(index) ==
-    LET key_index == 1
-    IN
-        /\ index = Cardinality(alice_cts)
-        /\ Cardinality(alice_cts) > 0 /\ Cardinality(bob_cts) > 0
-        /\ Cardinality(alice_cts) < NumTxs /\ Cardinality(bob_cts) < NumTxs
-        /\ alice_cts' = alice_cts \cup {CreateCT("alice", index, key_index)}
-        /\ bob_cts' = bob_cts \cup {CreateCT("bob", index, key_index)}
-        /\ alice_brs' = alice_brs \cup {[index |-> index, pk |-> <<"bob", key_index>>]}
-        /\ bob_brs' = bob_brs \cup {[index |-> index, pk |-> <<"alice", key_index>>]}
+    /\
+        LET key_index == 1
+        IN
+            /\ index > MaxIndex(alice_cts)
+            /\ index > MaxIndex(bob_cts)
+            /\ alice_cts' = alice_cts \cup {CreateCT("alice", index, key_index)}
+            /\ bob_cts' = bob_cts \cup {CreateCT("bob", index, key_index)}
+            /\ alice_brs' = alice_brs \cup {[index |-> index, pk |-> <<"bob", key_index>>]}
+            /\ bob_brs' = bob_brs \cup {[index |-> index, pk |-> <<"alice", key_index>>]}
+    /\ UNCHANGED <<funding_spent>>
 
 (***************************************************************************)
 (* Publish a commitment transaction to the blockchain.  The commitment is  *)
@@ -184,16 +190,28 @@ SupercedeCommitmentTx(index) ==
 (*                                                                         *)
 (* If not, it gives the other party a chance to spend the breach remedy    *)
 (* tx.                                                                     *)
+(*                                                                         *)
+(* TODO: Use Party -> cts function so we can merge these two actions.      *)
+(* TODO: Track which CT is spent and also the output spent.                *)
 (***************************************************************************)
-\*PublishCommitment(party, party_cts, ct) ==
-\*    /\ IF ct.index = Cardinality(party_cts)
-\*       THEN SpendCommitment(ct)
-\*       ELSE PublishPenalty(ct)
+AlicePublishCommitmentWithoutPenalty(index) ==
+    /\ funding_spent = FALSE
+    /\ index = MaxIndex(alice_cts)      \* Spend latest CT
+    /\ funding_spent' = TRUE
+    /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs>>
 
+BobPublishCommitmentWithoutPenalty(index) ==
+    /\ funding_spent = FALSE
+    /\ index = MaxIndex(bob_cts)        \* Spend latest CT
+    /\ funding_spent' = TRUE
+    /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs>>
+    
 Next ==
-    /\ \exists index \in 0..NumTxs: SupercedeCommitmentTx(index)
-\*    /\ \exists ct \in alice_cts: PublishCommitment("alice", alice_cts, ct)
-\*    /\ \exists ct \in bob_cts: PublishCommitment("bob", bob_cts, ct)
+    \/ \E index \in 0..NumTxs: SupercedeCommitmentTx(index)
+    \/ \E index \in 0..NumTxs: AlicePublishCommitmentWithoutPenalty(index)
+    \/ \E index \in 0..NumTxs: BobPublishCommitmentWithoutPenalty(index)
+    \/ \E index \in 0..NumTxs: AlicePublishCommitmentWithoutPenalty(index)
+
     
     
 Spec == Init /\ [][Next]_<<vars>>
