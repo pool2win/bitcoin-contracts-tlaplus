@@ -56,6 +56,7 @@ Contains(s, e) ==
   (**************************************************************************)
   \E i \in 1..Len(s) : s[i] = e
 
+Last(s) == s[Len(s)]
 -----------------------------------------------------------------------------
 
 (***************************************************************************)
@@ -115,10 +116,12 @@ CT == [index |-> 0..NumTxs,
 -----------------------------------------------------------------------------
 
 VARIABLES
-    alice_cts,
-    bob_cts
+    alice_cts,      \* Commitment tx for alice
+    bob_cts,        \* Commitment tx for bob
+    alice_brs,      \* Breach remedy transactions for alice
+    bob_brs         \* Breach remedy transactions for bob
 
-vars == <<alice_cts, bob_cts>>
+vars == <<alice_cts, bob_cts, alice_brs, bob_brs>>
 
 (***************************************************************************)
 (* Helper function to get other party                                      *)
@@ -128,50 +131,70 @@ OtherParty(party) == CHOOSE p \in Party: p # party
 CreateCT(party, index, key_num) ==
         [index |-> index,
          multisig |-> <<party, OtherParty(party), CSV>>,
-         pk |-> <<OtherParty(party), key_num>>,
+         pk |-> <<party, key_num>>,
          local_sig |-> NoSig,
          remote_sig |-> <<OtherParty(party), key_num>>]
 
 Init ==
     /\ alice_cts = {CreateCT("alice", 0, 0)}
     /\ bob_cts = {CreateCT("bob", 0, 0)}
+    /\ alice_brs = {}
+    /\ bob_brs = {}
 
 (***************************************************************************)
 (* We don't define transactions using a function because using variables   *)
 (* as functions become hard to work with in TLA+                           *)
 (***************************************************************************)
 TypeInvariant ==
-        /\ \A ct \in alice_cts:
+        /\ \A ct \in alice_cts \cup bob_cts:
             /\ ct.index \in 0..NumTxs
             /\ ct.local_sig \in Sig \cup {NoSig}
             /\ ct.remote_sig \in Sig \cup {NoSig}
             /\ ct.pk \in P2PKH
             /\ ct.multisig \in MultiSigWithCSV
+        /\ \A br \in alice_brs \cup bob_brs:
+            /\ br.index \in 0..NumTxs
+            /\ br.pk \in P2PKH
 
 -----------------------------------------------------------------------------
 
 (***************************************************************************)
 (* Create first commitment transactions for given parties                  *)
+(*                                                                         *)
+(* Breach remedy transactions are pre-signed transactions instead of they  *)
+(* private key being sent over to the other party.                         *)
 (***************************************************************************)
 SupercedeCommitmentTx(index) ==
+    LET key_index == 1
+    IN
         /\ index = Cardinality(alice_cts)
         /\ Cardinality(alice_cts) > 0 /\ Cardinality(bob_cts) > 0
         /\ Cardinality(alice_cts) < NumTxs /\ Cardinality(bob_cts) < NumTxs
-        /\ alice_cts' = alice_cts \cup {CreateCT("alice", index, 1)}
-        /\ bob_cts' = bob_cts \cup {CreateCT("bob", index, 1)}
+        /\ alice_cts' = alice_cts \cup {CreateCT("alice", index, key_index)}
+        /\ bob_cts' = bob_cts \cup {CreateCT("bob", index, key_index)}
+        /\ alice_brs' = alice_brs \cup {[index |-> index, pk |-> <<"bob", key_index>>]}
+        /\ bob_brs' = bob_brs \cup {[index |-> index, pk |-> <<"alice", key_index>>]}
 
 (***************************************************************************)
-(* Party p spends their commitment transaction.                            *)
+(* Publish a commitment transaction to the blockchain.  The commitment is  *)
+(* first signed.  The protocol allows all commitments to be published,     *)
+(* what happens next depends on the status of the commitment transaction.  *)
 (*                                                                         *)
 (* If the tx is the latest commitment transaction it is succesfuly spend.  *)
 (*                                                                         *)
-(* If not, ti gives the other party a chance to spend the breach remedy    *)
+(* If not, it gives the other party a chance to spend the breach remedy    *)
 (* tx.                                                                     *)
 (***************************************************************************)
-\* SpendCommitmentTx(p, tx)
+\*PublishCommitment(party, party_cts, ct) ==
+\*    /\ IF ct.index = Cardinality(party_cts)
+\*       THEN SpendCommitment(ct)
+\*       ELSE PublishPenalty(ct)
 
 Next ==
-    \exists index \in 0..NumTxs: SupercedeCommitmentTx(index)
-
+    /\ \exists index \in 0..NumTxs: SupercedeCommitmentTx(index)
+\*    /\ \exists ct \in alice_cts: PublishCommitment("alice", alice_cts, ct)
+\*    /\ \exists ct \in bob_cts: PublishCommitment("bob", bob_cts, ct)
+    
+    
 Spec == Init /\ [][Next]_<<vars>>
 =============================================================================
