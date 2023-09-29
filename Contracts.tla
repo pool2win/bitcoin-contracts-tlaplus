@@ -23,26 +23,55 @@
 
 EXTENDS Integers,
         TLC,
-        Sequences
+        Sequences,
+        FiniteSets
 
 CONSTANTS
     CSV,        \* The csv value to use in contracts
-    Height      \* The height up to which we run the spec
+    Height,     \* The height up to which we run the spec
+    NumTxs      \* The number of commitment txs we want
+
+-----------------------------------------------------------------------------
+(***************************************************************************)
+(* Sequences utility                                                       *)
+(***************************************************************************)
+
+SeqOf(set, n) ==
+  (***************************************************************************)
+  (* All sequences up to length n with all elements in set.  Includes empty  *)
+  (* sequence.                                                               *)
+  (***************************************************************************)
+  UNION {[1..m -> set] : m \in 0..n}
+
+ToSet(s) ==
+  (*************************************************************************)
+  (* The image of the given sequence s. Cardinality(ToSet(s)) <= Len(s)    *)
+  (* see https://en.wikipedia.org/wiki/Image_(mathematics)                 *)
+  (*************************************************************************)
+  { s[i] : i \in DOMAIN s }
+
+Contains(s, e) ==
+  (**************************************************************************)
+  (* TRUE iff the element e \in ToSet(s).                                   *)
+  (**************************************************************************)
+  \E i \in 1..Len(s) : s[i] = e
+
+-----------------------------------------------------------------------------
 
 (***************************************************************************)
-(* Channel contracts only ever have two parties                            *)
+(* Current channel contracts only ever have two parties                    *)
 (***************************************************************************)
- Party == {"alice", "bob"}
+Party == {"alice", "bob"}
 
 (***************************************************************************)
 (* For the first revocation we only need two keys per party                *)
 (***************************************************************************)
- NumKey == 2
+NumKey == 2
 
 (***************************************************************************)
 (* Set of all keys                                                         *)
 (***************************************************************************)
-Key == {<<p, k>>: p \in Party, k \in 0..NumKey - 1}
+Key == {<<p, k>>: p \in Party, k \in 0..NumKey}
 
 (***************************************************************************)
 (* Value to capture missing CSV in output                                  *)
@@ -64,10 +93,6 @@ MultiSigWithCSV == Party \X Party \X {CSV}
 (***************************************************************************)
 P2PKH == Key
 
-AllOutput == MultiSig \cup MultiSigWithCSV \cup P2PKH
-
-NoOutput == CHOOSE o : o \notin AllOutput
-
 (***************************************************************************)
 (* Set of all signatures for all commit txs.  The signature in real world  *)
 (* is related to the commit transaction, however, leave out this           *)
@@ -82,46 +107,58 @@ Sig == {<<p, k>>: p \in Party, k \in 0..NumKey - 1}
 (***************************************************************************)
 NoSig == CHOOSE s : s \notin Sig
 
+CT == [index |-> 0..NumTxs,
+       multisig |-> MultiSigWithCSV, pk |-> P2PKH,
+       local_sig |-> Sig \cup {NoSig},
+       remote_sig |-> Sig \cup {NoSig}]
+
 -----------------------------------------------------------------------------
 
 VARIABLES
-    outputs,     \* The set of all commiment transactions for both parties
-    local_sigs,
-    remote_sigs
+    alice_cts,
+    bob_cts
 
-vars == <<outputs, local_sigs, remote_sigs>>
-
-Init ==
-    /\ outputs = [p \in Party |-> <<>>]
-    /\ local_sigs = [p \in Party |-> NoSig]
-    /\ remote_sigs = [p \in Party |-> NoSig]
-
-(***************************************************************************)
-(* We don't define transactions using a function because using variables   *)
-(* as functions become hard to work with in TLA+                           *)
-(***************************************************************************)
-TypeInvariant ==
-        /\ outputs \in [Party -> Seq(AllOutput)]
-        /\ local_sigs \in [Party -> Sig \cup {NoSig}]
-        /\ remote_sigs \in [Party -> Sig \cup {NoSig}]
-
------------------------------------------------------------------------------
+vars == <<alice_cts, bob_cts>>
 
 (***************************************************************************)
 (* Helper function to get other party                                      *)
 (***************************************************************************)
 OtherParty(party) == CHOOSE p \in Party: p # party
 
+CreateCT(party, index, key_num) ==
+        [index |-> index,
+         multisig |-> <<party, OtherParty(party), CSV>>,
+         pk |-> <<OtherParty(party), key_num>>,
+         local_sig |-> NoSig,
+         remote_sig |-> <<OtherParty(party), key_num>>]
+
+Init ==
+    /\ alice_cts = {CreateCT("alice", 0, 0)}
+    /\ bob_cts = {CreateCT("bob", 0, 0)}
+
+(***************************************************************************)
+(* We don't define transactions using a function because using variables   *)
+(* as functions become hard to work with in TLA+                           *)
+(***************************************************************************)
+TypeInvariant ==
+        /\ \A ct \in alice_cts:
+            /\ ct.index \in 0..NumTxs
+            /\ ct.local_sig \in Sig \cup {NoSig}
+            /\ ct.remote_sig \in Sig \cup {NoSig}
+            /\ ct.pk \in P2PKH
+            /\ ct.multisig \in MultiSigWithCSV
+
+-----------------------------------------------------------------------------
+
 (***************************************************************************)
 (* Create first commitment transactions for given parties                  *)
 (***************************************************************************)
-CreateFirstCommitmentTx(party) ==
-        /\ outputs[party] = <<>>
-        /\ outputs' = [outputs EXCEPT ![party] =
-                                @ \o <<<<party, OtherParty(party), CSV>>,
-                                       <<OtherParty(party), 0>>>>]
-        /\ local_sigs' = [local_sigs EXCEPT ![party] = <<party, 0>>]
-        /\ remote_sigs' = [remote_sigs EXCEPT ![party] = <<OtherParty(party), 0>>]
+SupercedeCommitmentTx(index) ==
+        /\ index = Cardinality(alice_cts)
+        /\ Cardinality(alice_cts) > 0 /\ Cardinality(bob_cts) > 0
+        /\ Cardinality(alice_cts) < NumTxs /\ Cardinality(bob_cts) < NumTxs
+        /\ alice_cts' = alice_cts \cup {CreateCT("alice", index, 1)}
+        /\ bob_cts' = bob_cts \cup {CreateCT("bob", index, 1)}
 
 (***************************************************************************)
 (* Party p spends their commitment transaction.                            *)
@@ -134,7 +171,7 @@ CreateFirstCommitmentTx(party) ==
 \* SpendCommitmentTx(p, tx)
 
 Next ==
-    \/ \exists p \in Party: CreateFirstCommitmentTx(p)
+    \exists index \in 0..NumTxs: SupercedeCommitmentTx(index)
 
 Spec == Init /\ [][Next]_<<vars>>
 =============================================================================
