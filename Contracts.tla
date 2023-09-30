@@ -186,15 +186,18 @@ PublishCommitment(party, index, height) ==
     /\ mempool_ct' = <<party, index, height>>
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs, published_ct>>
 
-(***************************************************************************)
-(* Publish a breach remedy transaction in response to a commitment         *)
-(* transaction.                                                            *)
-(*                                                                         *)
-(* This tx is immediately published on chain.                              *)
-(*                                                                         *)
-(* TODO: We skip the BR going through the mempool and confirm it           *)
-(* immeidiately.  This can be improved too.                                *)
-(***************************************************************************)   
+(****************************************************************************
+Publish a breach remedy transaction in response to a commitment
+transaction.
+
+party is publishing the breach remedy tx when it is on index CT, and
+the chain is on height.
+
+This tx is immediately published on chain.
+
+TODO: We skip the BR going through the mempool and confirm it
+immeidiately.  This can be improved too.
+****************************************************************************)
 PublishBR(party, index, height) ==
     LET cts == IF party = "alice" THEN alice_cts ELSE bob_cts
     IN
@@ -204,7 +207,7 @@ PublishBR(party, index, height) ==
         /\ mempool_ct[2] < MaxIndex(cts)            \* Revoked CT was published
         /\ mempool_ct[2] = index                    \* We need to use the BR from the same index
         /\ height - mempool_ct[2] < CSV             \* Can only publish BR if CSV hasn't expired
-        /\ published_ct' = <<party, index, height>>  \* TODO: Pick the appropriate party's BRS
+        /\ published_ct' = <<party, index, height>> \* Record which index was published at what height
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs, mempool_ct>>
 
  
