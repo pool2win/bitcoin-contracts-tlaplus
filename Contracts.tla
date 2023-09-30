@@ -69,9 +69,9 @@ MultiSig == Party \X Party \X {NoCSV}
 MultiSigWithCSV == Party \X Party \X {CSV}
 
 (***************************************************************************)
-(* P2PKH outputs, without encumbrance                                      *)
+(* P2WKH outputs, without encumbrance                                      *)
 (***************************************************************************)
-P2PKH == Key
+P2WKH == Key
 
 (***************************************************************************)
 (* Set of all signatures for all commit txs.  The signature in real world  *)
@@ -88,7 +88,7 @@ Sig == {<<p, k>>: p \in Party, k \in 0..NumKey - 1}
 NoSig == CHOOSE s : s \notin Sig
 
 CT == [index |-> 0..NumTxs,
-       multisig |-> MultiSigWithCSV, pk |-> P2PKH,
+       multisig |-> MultiSigWithCSV, pk |-> P2WKH,
        local_sig |-> Sig \cup {NoSig},
        remote_sig |-> Sig \cup {NoSig}]
 
@@ -136,11 +136,11 @@ TypeInvariant ==
             /\ ct.index \in 0..NumTxs
             /\ ct.local_sig \in Sig \cup {NoSig}
             /\ ct.remote_sig \in Sig \cup {NoSig}
-            /\ ct.pk \in P2PKH
+            /\ ct.pk \in P2WKH
             /\ ct.multisig \in MultiSigWithCSV
         /\ \A br \in alice_brs \cup bob_brs:
             /\ br.index \in 0..NumTxs
-            /\ br.pk \in P2PKH
+            /\ br.pk \in P2WKH
         /\ mempool_ct \in PublishId \cup {NoSpend}
         /\ published_ct \in PublishId \cup {NoSpend}
 
