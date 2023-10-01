@@ -12,7 +12,7 @@
 (*                                                                         *)
 (* We also do not deal with the communication protocol between nodes for   *)
 (* creating and updating commitment transactions.  This spec will only     *)
-(* focusses on the various commitment transaction and their lifecycle in   *)
+(* focuss on the various commitment transaction and their lifecycle in     *)
 (* response to interaction between parties and the blockchain.             *)
 (*                                                                         *)
 (* We ignore the details of how transactions are signed and just mark      *)
@@ -20,8 +20,13 @@
 (* behaviour of the commitment transactions without dealing with lower     *)
 (* level complexities.                                                     *)
 (*                                                                         *)
-(* TODO: We don't track balances yet.  Need to do that and don't go into   *)
-(* certain states depending on the balance checks                          *)
+(* The model defines the intial balance from alice to bob.  TLA+ will      *)
+(* handle situations where channels are balanced and when all the balance  *)
+(* is on the other side.                                                   *)
+(*                                                                         *)
+(* TODO: We have forced an artificial limit of NumTxs to explore states up *)
+(* to.  With balances now in place we can get rid of this artificial       *)
+(* limit.                                                                  *)
 (*                                                                         *)
 (* TODO: Add HTLCs! Now that will be fun!                                  *)
 (***************************************************************************)
@@ -32,9 +37,10 @@ EXTENDS Integers,
         FiniteSets
 
 CONSTANTS
-    CSV,        \* The csv value to use in contracts
-    Height,     \* The height up to which we run the spec
-    NumTxs      \* The number of commitment txs we want
+    CSV,            \* The csv value to use in contracts
+    Height,         \* The height up to which we run the spec
+    NumTxs,         \* The number of commitment txs we want
+    InitialBalance  \* Initial balances for alice and bob
 
 -----------------------------------------------------------------------------
 
@@ -90,7 +96,8 @@ NoSig == CHOOSE s : s \notin Sig
 CT == [index |-> 0..NumTxs,
        multisig |-> MultiSigWithCSV, pk |-> P2WKH,
        local_sig |-> Sig \cup {NoSig},
-       remote_sig |-> Sig \cup {NoSig}]
+       remote_sig |-> Sig \cup {NoSig},
+       balance |-> -InitialBalance..InitialBalance]
 
 PublishId == {<<p, i, h>>: p \in Party, i \in 0..NumTxs, h \in 0..Height}      
 NoSpend == <<>>
@@ -115,16 +122,18 @@ OtherParty(party) == CHOOSE p \in Party: p # party
 (***************************************************************************)
 (* Create a commitment transaction given the party, index and key to use.  *)
 (***************************************************************************)
-CreateCT(party, index, key_num) ==
+CreateCT(party, index, key_num, balance) ==
         [index |-> index,
          multisig |-> <<party, OtherParty(party), CSV>>,
          pk |-> <<party, key_num>>,
          local_sig |-> NoSig,
-         remote_sig |-> <<OtherParty(party), key_num>>]
+         remote_sig |-> <<OtherParty(party), key_num>>,
+         balance |-> balance]
 
 Init ==
-    /\ alice_cts = {CreateCT("alice", 0, 0)}
-    /\ bob_cts = {CreateCT("bob", 0, 0)}
+    \* Once sided channel to start with
+    /\ alice_cts = {CreateCT("alice", 0, 0, InitialBalance)}
+    /\ bob_cts = {CreateCT("bob", 0, 0, 0)}
     /\ alice_brs = {}
     /\ bob_brs = {}
     /\ mempool_ct = {}
@@ -148,25 +157,42 @@ TypeInvariant ==
 MaxIndex(party_cts) ==
     (CHOOSE x \in party_cts: \A y \in party_cts: x.index >= y.index).index
 
+LastCT(party_cts) ==
+    CHOOSE ct \in party_cts: \A y \in party_cts: ct.index >= y.index
+
 (***************************************************************************)
 (* Create first commitment transactions for given parties                  *)
 (*                                                                         *)
 (* Breach remedy transactions are pre-signed transactions instead of they  *)
 (* private key being sent over to the other party.                         *)
 (*                                                                         *)
+(* delta is the balance going from alice to bob.  We allow negative        *)
+(* balances to enable payments in other other direction.                   *)
+(*                                                                         *)
 (* Parties are free to keep creating CT even if FT is spent.  They will    *)
 (* not be usable, but the protocol does not disallow this.                 *)
 (***************************************************************************)
-SupersedeCommitmentTx(index) ==
+SupersedeCommitmentTx(index, delta) ==
     /\
-        LET key_index == 1
+        LET
+            key_index == 1
+            last_alice_ct == LastCT(alice_cts)
+            last_bob_ct == LastCT(bob_cts)
         IN
             /\ index > MaxIndex(alice_cts)
             /\ index > MaxIndex(bob_cts)
-            /\ alice_cts' = alice_cts \cup {CreateCT("alice", index, key_index)}
-            /\ bob_cts' = bob_cts \cup {CreateCT("bob", index, key_index)}
-            /\ alice_brs' = alice_brs \cup {[index |-> index, pk |-> <<"bob", key_index>>]}
-            /\ bob_brs' = bob_brs \cup {[index |-> index, pk |-> <<"alice", key_index>>]}
+            /\ last_alice_ct.balance - delta > 0
+            /\ last_bob_ct.balance + delta > 0
+            /\ alice_cts' = alice_cts \cup
+                    {CreateCT("alice", index, key_index,
+                                last_alice_ct.balance - delta)}
+            /\ bob_cts' = bob_cts \cup
+                    {CreateCT("bob", index, key_index,
+                                last_alice_ct.balance + delta)}
+            /\ alice_brs' = alice_brs \cup
+                    {[index |-> index, pk |-> <<"bob", key_index>>]}
+            /\ bob_brs' = bob_brs \cup
+                    {[index |-> index, pk |-> <<"alice", key_index>>]}
     /\ UNCHANGED <<mempool_ct, published_ct>>
 
 (***************************************************************************)
@@ -187,34 +213,35 @@ PublishCommitment(party, index, height) ==
     /\ mempool_ct' = mempool_ct \cup {<<party, index, height>>}
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs, published_ct>>
 
-(****************************************************************************
-Publish a breach remedy transaction in response to a commitment
-transaction.
-
-party is publishing the breach remedy tx when it is on index CT, and
-the chain is on height.
-
-This tx is immediately published on chain.
-
-TODO: We skip the BR going through the mempool and confirm it
-immeidiately.  This can be improved too.
-****************************************************************************)
+(***************************************************************************)
+(* Publish a breach remedy transaction in response to a commitment         *)
+(* transaction.                                                            *)
+(*                                                                         *)
+(* party is publishing the breach remedy tx when it is on index CT, and    *)
+(* the chain is on height.                                                 *)
+(*                                                                         *)
+(* This tx is immediately published on chain.                              *)
+(*                                                                         *)
+(* TODO: We skip the BR going through the mempool and confirm it           *)
+(* immeidiately.  This can be improved too.                                *)
+(***************************************************************************)
 PublishBR(party, index, height) ==
     LET cts == IF party = "alice" THEN alice_cts ELSE bob_cts
     IN
-        /\ published_ct = NoSpend                   \* No CT is confirmed on chain yet
+        /\ published_ct = NoSpend              \* No CT is confirmed on chain yet
         /\ mempool_ct # {}                     \* Only if some CT has been published
         /\ \E m \in mempool_ct:
             /\ m[1] = OtherParty(party)        \* CT was broadcastt by the other party
             /\ m[2] < MaxIndex(cts)            \* Revoked CT was broadcast
             /\ m[2] = index                    \* We need to use the BR from the same index
             /\ height - m[2] < CSV             \* Can only publish BR if CSV hasn't expired
-        /\ published_ct' = <<party, index, height>> \* Record which index was published at what height
+        \* Record which index was published at what height
+        /\ published_ct' = <<party, index, height>>
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs, mempool_ct>>
 
  
 Next ==
-    \/ \E i \in 0..NumTxs: SupersedeCommitmentTx(i)
+    \/ \E i \in 0..NumTxs, d \in -InitialBalance..InitialBalance: SupersedeCommitmentTx(i, d)
     \/ \E i \in 0..NumTxs, p \in Party, h \in 0..Height: PublishCommitment(p, i, h)
     \/ \E i \in 0..NumTxs, p \in Party, h \in 0..Height: PublishBR(p, i, h)
 
