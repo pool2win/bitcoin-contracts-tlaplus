@@ -157,7 +157,8 @@ LastCT(party_cts) ==
     CHOOSE ct \in party_cts: \A y \in party_cts: ct.index >= y.index
 
 (***************************************************************************)
-(* Create first commitment transactions for given parties                  *)
+(* Create commitment transaction as well as the corresponding beach remedy *)
+(* txs.                                                                    *)
 (*                                                                         *)
 (* Breach remedy transactions are pre-signed transactions instead of they  *)
 (* private key being sent over to the other party.                         *)
