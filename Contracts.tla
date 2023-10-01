@@ -24,10 +24,6 @@
 (* handle situations where channels are balanced and when all the balance  *)
 (* is on the other side.                                                   *)
 (*                                                                         *)
-(* TODO: We have forced an artificial limit of NumTxs to explore states up *)
-(* to.  With balances now in place we can get rid of this artificial       *)
-(* limit.                                                                  *)
-(*                                                                         *)
 (* TODO: Add HTLCs! Now that will be fun!                                  *)
 (***************************************************************************)
 
