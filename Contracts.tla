@@ -27,8 +27,6 @@
 (* TODO: Add actions for closing channels.  Currenly we only have support  *)
 (* for breach tx and the corresponding breach remedy txs.                  *)
 (*                                                                         *)
-(* TODO: Add liveness properties for breach / justice txs.                 *)
-(*                                                                         *)
 (* TODO: Add HTLCs.                                                        *)
 (***************************************************************************)
 
@@ -219,10 +217,13 @@ SupersedeCommitmentTx(delta) ==
 (* the non-CSV output being published and co-op closes.                    *)
 (***************************************************************************)
 PublishCommitment(party, height) ==
-    LET i == AnyCT.index
-    IN
-        /\ mempool_ct = {}
-        /\ mempool_ct' = mempool_ct \cup {<<party, i, height>>}
+    /\ alice_cts # {}
+    /\ bob_cts # {}
+    /\
+        LET i == AnyCT.index
+        IN
+            /\ mempool_ct = {}
+            /\ mempool_ct' = mempool_ct \cup {<<party, i, height>>}
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
                     published_ct, index>>
 
@@ -236,18 +237,21 @@ PublishCommitment(party, height) ==
 (* This tx is immediately published on chain.                              *)
 (*                                                                         *)
 (* TODO: We skip the BR going through the mempool and confirm it           *)
-(* immeidiately.  This can be improved too.                                *)
+(* immediately.  This can be improved too.                                 *)
 (***************************************************************************)
-PublishBR(party, in_mempool, height) ==
-    LET cts == IF party = "alice" THEN alice_cts ELSE bob_cts
-    IN
-        /\ published_ct = NoSpend              \* No CT is confirmed on chain yet
-        /\ mempool_ct # {}                     \* Only if some CT has been published
-        /\ in_mempool[1] = OtherParty(party)        \* CT was broadcastt by the other party
-        /\ in_mempool[2] < MaxIndex(cts)            \* Revoked CT was broadcast
-        /\ height - in_mempool[2] < CSV             \* Can only publish BR if CSV hasn't expired
-        \* Record which index was published at what height
-        /\ published_ct' = <<party, in_mempool[2], height>>
+PublishBR(party, height) ==
+    /\
+        LET
+            cts == IF party = "alice" THEN alice_cts ELSE bob_cts
+            in_mempool == CHOOSE m \in mempool_ct: TRUE
+        IN
+            /\ published_ct = NoSpend              \* No CT is confirmed on chain yet
+            /\ mempool_ct # {}                     \* Only if some CT has been published
+            /\ in_mempool[1] = OtherParty(party)        \* CT was broadcastt by the other party
+            /\ in_mempool[2] < MaxIndex(cts)            \* Revoked CT was broadcast
+            /\ height - in_mempool[2] < CSV             \* Can only publish BR if CSV hasn't expired
+            \* Record which index was published at what height
+            /\ published_ct' = <<party, in_mempool[2], height>>
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
                     mempool_ct, index>>
 
@@ -255,7 +259,13 @@ PublishBR(party, in_mempool, height) ==
 Next ==
     \/ \E d \in {-1, 1}: SupersedeCommitmentTx(d)
     \/ \E p \in Party, h \in 0..Height: PublishCommitment(p, h)
-    \/ \E p \in Party, h \in 0..Height, m \in mempool_ct: PublishBR(p, m, h)
+    \/ \E p \in Party, h \in 0..Height: PublishBR(p, h)
 
 Spec == Init /\ [][Next]_<<vars>>
+
+Liveness == \E p \in Party, h \in 0..Height:
+                    WF_vars(PublishBR(p, h))
+
+FairSpec == Spec /\ Liveness
+
 =============================================================================
