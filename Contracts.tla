@@ -24,7 +24,12 @@
 (* handle situations where channels are balanced and when all the balance  *)
 (* is on the other side.                                                   *)
 (*                                                                         *)
-(* TODO: Add HTLCs! Now that will be fun!                                  *)
+(* TODO: Add actions for closing channels.  Currenly we only have support  *)
+(* for breach tx and the corresponding breach remedy txs.                  *)
+(*                                                                         *)
+(* TODO: Add liveness properties for breach / justice txs.                 *)
+(*                                                                         *)
+(* TODO: Add HTLCs.                                                        *)
 (***************************************************************************)
 
 EXTENDS Integers,
@@ -93,10 +98,11 @@ CT == [index |-> 0..NumTxs,
        multisig |-> MultiSigWithCSV, pk |-> P2WKH,
        local_sig |-> Sig \cup {NoSig},
        remote_sig |-> Sig \cup {NoSig},
-       balance |-> -InitialBalance..InitialBalance]
+       balance |-> 0..InitialBalance]
 
 PublishId == {<<p, i, h>>: p \in Party, i \in 0..NumTxs, h \in 0..Height}      
 NoSpend == <<>>
+
 -----------------------------------------------------------------------------
 
 VARIABLES
@@ -105,10 +111,11 @@ VARIABLES
     alice_brs,      \* Breach remedy transactions for alice
     bob_brs,        \* Breach remedy transactions for bob
     mempool_ct,     \* The CT txs that have been broadcasted.
-    published_ct    \* The CT that has been included in a block and confirmed.
+    published_ct,   \* The CT that has been included in a block and confirmed.
+    index
        
 
-vars == <<alice_cts, bob_cts, alice_brs, bob_brs, mempool_ct, published_ct>>
+vars == <<alice_cts, bob_cts, alice_brs, bob_brs, mempool_ct, published_ct, index>>
 
 (***************************************************************************)
 (* Helper function to get other party                                      *)
@@ -118,8 +125,8 @@ OtherParty(party) == CHOOSE p \in Party: p # party
 (***************************************************************************)
 (* Create a commitment transaction given the party, index and key to use.  *)
 (***************************************************************************)
-CreateCT(party, index, key_num, balance) ==
-        [index |-> index,
+CreateCT(party, i, key_num, balance) ==
+        [index |-> i,
          multisig |-> <<party, OtherParty(party), CSV>>,
          pk |-> <<party, key_num>>,
          local_sig |-> NoSig,
@@ -127,26 +134,28 @@ CreateCT(party, index, key_num, balance) ==
          balance |-> balance]
 
 Init ==
-    \* Once sided channel to start with
+    \* Balanced channel to start with
     /\ alice_cts = {CreateCT("alice", 0, 0, InitialBalance)}
-    /\ bob_cts = {CreateCT("bob", 0, 0, 0)}
+    /\ bob_cts = {CreateCT("bob", 0, 0, InitialBalance)}
     /\ alice_brs = {}
     /\ bob_brs = {}
     /\ mempool_ct = {}
     /\ published_ct = NoSpend
+    /\ index = 1
 
 TypeInvariant ==
         /\ \A ct \in alice_cts \cup bob_cts:
-            /\ ct.index \in 0..NumTxs
+            /\ ct.index \in Nat
             /\ ct.local_sig \in Sig \cup {NoSig}
             /\ ct.remote_sig \in Sig \cup {NoSig}
             /\ ct.pk \in P2WKH
             /\ ct.multisig \in MultiSigWithCSV
         /\ \A br \in alice_brs \cup bob_brs:
-            /\ br.index \in 0..NumTxs
+            /\ br.index \in Nat
             /\ br.pk \in P2WKH
         /\ mempool_ct \in SUBSET PublishId
         /\ published_ct \in PublishId \cup {NoSpend}
+        /\ index \in Nat
 
 -----------------------------------------------------------------------------
 
@@ -155,6 +164,8 @@ MaxIndex(party_cts) ==
 
 LastCT(party_cts) ==
     CHOOSE ct \in party_cts: \A y \in party_cts: ct.index >= y.index
+
+AnyCT == (CHOOSE ct \in alice_cts \cup bob_cts: TRUE)
 
 (***************************************************************************)
 (* Create commitment transaction as well as the corresponding beach remedy *)
@@ -169,27 +180,29 @@ LastCT(party_cts) ==
 (* Parties are free to keep creating CT even if FT is spent.  They will    *)
 (* not be usable, but the protocol does not disallow this.                 *)
 (***************************************************************************)
-SupersedeCommitmentTx(index, delta) ==
+SupersedeCommitmentTx(delta) ==
     /\
         LET
             key_index == 1
             last_alice_ct == LastCT(alice_cts)
             last_bob_ct == LastCT(bob_cts)
         IN
-            /\ index > MaxIndex(alice_cts)
-            /\ index > MaxIndex(bob_cts)
-            /\ last_alice_ct.balance - delta > 0
-            /\ last_bob_ct.balance + delta > 0
+            /\ published_ct = NoSpend   \* Create CTs till channel is not closed
+            /\ NumTxs > index           \* We still need this as channels
+                                        \* can be used inifinitely
+            /\ last_alice_ct.balance + delta > 0
+            /\ last_bob_ct.balance - delta > 0
             /\ alice_cts' = alice_cts \cup
                     {CreateCT("alice", index, key_index,
-                                last_alice_ct.balance - delta)}
+                        last_alice_ct.balance + delta)}
             /\ bob_cts' = bob_cts \cup
                     {CreateCT("bob", index, key_index,
-                                last_alice_ct.balance + delta)}
+                        last_alice_ct.balance - delta)}
             /\ alice_brs' = alice_brs \cup
                     {[index |-> index, pk |-> <<"bob", key_index>>]}
             /\ bob_brs' = bob_brs \cup
                     {[index |-> index, pk |-> <<"alice", key_index>>]}
+            /\ index' = index + 1
     /\ UNCHANGED <<mempool_ct, published_ct>>
 
 (***************************************************************************)
@@ -205,10 +218,13 @@ SupersedeCommitmentTx(index, delta) ==
 (* TODO: We only spec CSV (self) commitment transaction. We need to handle *)
 (* the non-CSV output being published and co-op closes.                    *)
 (***************************************************************************)
-PublishCommitment(party, index, height) ==
-    /\ mempool_ct = {}
-    /\ mempool_ct' = mempool_ct \cup {<<party, index, height>>}
-    /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs, published_ct>>
+PublishCommitment(party, height) ==
+    LET i == AnyCT.index
+    IN
+        /\ mempool_ct = {}
+        /\ mempool_ct' = mempool_ct \cup {<<party, i, height>>}
+    /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
+                    published_ct, index>>
 
 (***************************************************************************)
 (* Publish a breach remedy transaction in response to a commitment         *)
@@ -222,27 +238,24 @@ PublishCommitment(party, index, height) ==
 (* TODO: We skip the BR going through the mempool and confirm it           *)
 (* immeidiately.  This can be improved too.                                *)
 (***************************************************************************)
-PublishBR(party, index, height) ==
+PublishBR(party, in_mempool, height) ==
     LET cts == IF party = "alice" THEN alice_cts ELSE bob_cts
     IN
         /\ published_ct = NoSpend              \* No CT is confirmed on chain yet
         /\ mempool_ct # {}                     \* Only if some CT has been published
-        /\ \E m \in mempool_ct:
-            /\ m[1] = OtherParty(party)        \* CT was broadcastt by the other party
-            /\ m[2] < MaxIndex(cts)            \* Revoked CT was broadcast
-            /\ m[2] = index                    \* We need to use the BR from the same index
-            /\ height - m[2] < CSV             \* Can only publish BR if CSV hasn't expired
+        /\ in_mempool[1] = OtherParty(party)        \* CT was broadcastt by the other party
+        /\ in_mempool[2] < MaxIndex(cts)            \* Revoked CT was broadcast
+        /\ height - in_mempool[2] < CSV             \* Can only publish BR if CSV hasn't expired
         \* Record which index was published at what height
-        /\ published_ct' = <<party, index, height>>
-    /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs, mempool_ct>>
+        /\ published_ct' = <<party, in_mempool[2], height>>
+    /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
+                    mempool_ct, index>>
 
  
 Next ==
-    \/ \E i \in 0..NumTxs, d \in -InitialBalance..InitialBalance: SupersedeCommitmentTx(i, d)
-    \/ \E i \in 0..NumTxs, p \in Party, h \in 0..Height: PublishCommitment(p, i, h)
-    \/ \E i \in 0..NumTxs, p \in Party, h \in 0..Height: PublishBR(p, i, h)
+    \/ \E d \in {-1, 1}: SupersedeCommitmentTx(d)
+    \/ \E p \in Party, h \in 0..Height: PublishCommitment(p, h)
+    \/ \E p \in Party, h \in 0..Height, m \in mempool_ct: PublishBR(p, m, h)
 
-    
-    
 Spec == Init /\ [][Next]_<<vars>>
 =============================================================================
