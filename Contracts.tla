@@ -38,7 +38,6 @@ EXTENDS Integers,
 CONSTANTS
     CSV,            \* The csv value to use in contracts
     Height,         \* The height up to which we run the spec
-    NumTxs,         \* The number of commitment txs we want
     InitialBalance  \* Initial balances for alice and bob
 
 -----------------------------------------------------------------------------
@@ -92,14 +91,15 @@ Sig == {<<p, k>>: p \in Party, k \in 0..NumKey - 1}
 (***************************************************************************)
 NoSig == CHOOSE s : s \notin Sig
 
-CT == [index |-> 0..NumTxs,
+CT == [index |-> Int,
        multisig |-> MultiSigWithCSV, pk |-> P2WKH,
        local_sig |-> Sig \cup {NoSig},
        remote_sig |-> Sig \cup {NoSig},
        balance |-> 0..InitialBalance]
 
-PublishId == {<<p, i, h>>: p \in Party, i \in 0..NumTxs, h \in 0..Height}      
-NoSpend == <<>>
+OnChainTx == [party |-> Party,
+              index |-> Int,
+              height |-> Int]
 
 -----------------------------------------------------------------------------
 
@@ -131,6 +131,11 @@ CreateCT(party, i, key_num, balance) ==
          remote_sig |-> <<OtherParty(party), key_num>>,
          balance |-> balance]
 
+CreateOnChainTx(party, ix, height) ==
+        [party |-> party,
+         index |-> ix,
+         height |-> height]
+
 Init ==
     \* Balanced channel to start with
     /\ alice_cts = {CreateCT("alice", 0, 0, InitialBalance)}
@@ -138,7 +143,7 @@ Init ==
     /\ alice_brs = {}
     /\ bob_brs = {}
     /\ mempool_ct = {}
-    /\ published_ct = NoSpend
+    /\ published_ct = {}
     /\ index = 1
 
 TypeInvariant ==
@@ -151,8 +156,14 @@ TypeInvariant ==
         /\ \A br \in alice_brs \cup bob_brs:
             /\ br.index \in Nat
             /\ br.pk \in P2WKH
-        /\ mempool_ct \in SUBSET PublishId
-        /\ published_ct \in PublishId \cup {NoSpend}
+        /\ \A p \in mempool_ct:
+             /\ p.party \in Party
+             /\ p.index \in Int
+             /\ p.height \in 0..Height
+        /\ \A p \in published_ct:
+             /\ p.party \in Party
+             /\ p.index \in Int
+             /\ p.height \in 0..Height
         /\ index \in Nat
 
 -----------------------------------------------------------------------------
@@ -185,9 +196,8 @@ SupersedeCommitmentTx(delta) ==
             last_alice_ct == LastCT(alice_cts)
             last_bob_ct == LastCT(bob_cts)
         IN
-            /\ published_ct = NoSpend   \* Create CTs till channel is not closed
-            /\ NumTxs > index           \* We still need this as channels
-                                        \* can be used inifinitely
+            \* Create CTs till channel is not closed
+            /\ published_ct = {}
             /\ last_alice_ct.balance + delta > 0
             /\ last_bob_ct.balance - delta > 0
             /\ alice_cts' = alice_cts \cup
@@ -220,10 +230,12 @@ PublishCommitment(party, height) ==
     /\ alice_cts # {}
     /\ bob_cts # {}
     /\
-        LET i == AnyCT.index
+        LET
+            i == AnyCT.index
+            tx == CreateOnChainTx(party, i, height)
         IN
-            /\ mempool_ct = {}
-            /\ mempool_ct' = mempool_ct \cup {<<party, i, height>>}
+            /\ tx \notin mempool_ct
+            /\ mempool_ct' = mempool_ct \cup {tx}
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
                     published_ct, index>>
 
@@ -245,13 +257,14 @@ PublishBR(party, height) ==
             cts == IF party = "alice" THEN alice_cts ELSE bob_cts
             in_mempool == CHOOSE m \in mempool_ct: TRUE
         IN
-            /\ published_ct = NoSpend              \* No CT is confirmed on chain yet
+            /\ published_ct = {}                   \* No CT is confirmed on chain yet
             /\ mempool_ct # {}                     \* Only if some CT has been published
-            /\ in_mempool[1] = OtherParty(party)        \* CT was broadcastt by the other party
-            /\ in_mempool[2] < MaxIndex(cts)            \* Revoked CT was broadcast
-            /\ height - in_mempool[2] < CSV             \* Can only publish BR if CSV hasn't expired
+            /\ in_mempool.party = OtherParty(party)        \* CT was broadcastt by the other party
+            /\ in_mempool.index < MaxIndex(cts)            \* Revoked CT was broadcast
+            /\ height - in_mempool.index < CSV             \* Can only publish BR if CSV hasn't expired
             \* Record which index was published at what height
-            /\ published_ct' = <<party, in_mempool[2], height>>
+            /\ published_ct' = published_ct \cup
+                                {CreateOnChainTx(party, in_mempool.index, height)}
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
                     mempool_ct, index>>
 
