@@ -108,12 +108,12 @@ VARIABLES
     bob_cts,        \* Commitment tx for bob
     alice_brs,      \* Breach remedy transactions for alice
     bob_brs,        \* Breach remedy transactions for bob
-    mempool_ct,     \* The CT txs that have been broadcasted.
-    published_ct,   \* The CT that has been included in a block and confirmed.
+    mempool,     \* The CT txs that have been broadcasted.
+    published,   \* The CT that has been included in a block and confirmed.
     index
        
 
-vars == <<alice_cts, bob_cts, alice_brs, bob_brs, mempool_ct, published_ct, index>>
+vars == <<alice_cts, bob_cts, alice_brs, bob_brs, mempool, published, index>>
 
 (***************************************************************************)
 (* Helper function to get other party                                      *)
@@ -142,8 +142,8 @@ Init ==
     /\ bob_cts = {CreateCT("bob", 0, 0, InitialBalance)}
     /\ alice_brs = {}
     /\ bob_brs = {}
-    /\ mempool_ct = {}
-    /\ published_ct = {}
+    /\ mempool = {}
+    /\ published = {}
     /\ index = 1
 
 TypeInvariant ==
@@ -156,11 +156,11 @@ TypeInvariant ==
         /\ \A br \in alice_brs \cup bob_brs:
             /\ br.index \in Nat
             /\ br.pk \in P2WKH
-        /\ \A p \in mempool_ct:
+        /\ \A p \in mempool:
              /\ p.party \in Party
              /\ p.index \in Int
              /\ p.height \in 0..Height
-        /\ \A p \in published_ct:
+        /\ \A p \in published:
              /\ p.party \in Party
              /\ p.index \in Int
              /\ p.height \in 0..Height
@@ -197,7 +197,7 @@ SupersedeCommitmentTx(delta) ==
             last_bob_ct == LastCT(bob_cts)
         IN
             \* Create CTs till channel is not closed
-            /\ published_ct = {}
+            /\ published = {}
             /\ last_alice_ct.balance + delta > 0
             /\ last_bob_ct.balance - delta > 0
             /\ alice_cts' = alice_cts \cup
@@ -211,7 +211,7 @@ SupersedeCommitmentTx(delta) ==
             /\ bob_brs' = bob_brs \cup
                     {[index |-> index, pk |-> <<"alice", key_index>>]}
             /\ index' = index + 1
-    /\ UNCHANGED <<mempool_ct, published_ct>>
+    /\ UNCHANGED <<mempool, published>>
 
 (***************************************************************************)
 (* Publish a commitment transaction to the blockchain.  The commitment is  *)
@@ -226,7 +226,7 @@ SupersedeCommitmentTx(delta) ==
 (* TODO: We only spec CSV (self) commitment transaction. We need to handle *)
 (* the non-CSV output being published and co-op closes.                    *)
 (***************************************************************************)
-PublishCommitment(party, height) ==
+BroadcastCommitment(party, height) ==
     /\ alice_cts # {}
     /\ bob_cts # {}
     /\
@@ -234,10 +234,11 @@ PublishCommitment(party, height) ==
             i == AnyCT.index
             tx == CreateOnChainTx(party, i, height)
         IN
-            /\ tx \notin mempool_ct
-            /\ mempool_ct' = mempool_ct \cup {tx}
+            /\ tx \notin mempool
+            /\ tx \notin published
+            /\ mempool' = mempool \cup {tx}
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
-                    published_ct, index>>
+                    published, index>>
 
 (***************************************************************************)
 (* Publish a breach remedy transaction in response to a commitment         *)
@@ -255,23 +256,22 @@ PublishBR(party, height) ==
     /\
         LET
             cts == IF party = "alice" THEN alice_cts ELSE bob_cts
-            in_mempool == CHOOSE m \in mempool_ct: TRUE
         IN
-            /\ published_ct = {}                   \* No CT is confirmed on chain yet
-            /\ mempool_ct # {}                     \* Only if some CT has been published
-            /\ in_mempool.party = OtherParty(party)        \* CT was broadcast by the other party
-            /\ in_mempool.index < MaxIndex(cts)            \* Revoked CT was broadcast
-            /\ height - in_mempool.index < CSV             \* Can only publish BR if CSV hasn't expired
-            \* Record which index was published at what height
-            /\ published_ct' = published_ct \cup
-                                {CreateOnChainTx(party, in_mempool.index, height)}
+            \E in_mempool \in mempool:
+                /\ published = {}                   \* No CT is confirmed on chain yet
+                /\ in_mempool.party = OtherParty(party)    \* CT was broadcast by the other party
+                /\ in_mempool.index < MaxIndex(cts)        \* Revoked CT was broadcast
+                /\ height - in_mempool.index < CSV         \* CSV hasn't expired
+                \* Record which index was published at what height
+                /\ published' = published \cup
+                                    {CreateOnChainTx(party, in_mempool.index, height)}
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
-                    mempool_ct, index>>
+                    mempool, index>>
 
  
 Next ==
     \/ \E d \in {-1, 1}: SupersedeCommitmentTx(d)
-    \/ \E p \in Party, h \in 0..Height: PublishCommitment(p, h)
+    \/ \E p \in Party, h \in 0..Height: BroadcastCommitment(p, h)
     \/ \E p \in Party, h \in 0..Height: PublishBR(p, h)
 
 Spec == Init /\ [][Next]_<<vars>>
