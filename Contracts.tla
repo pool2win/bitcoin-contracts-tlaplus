@@ -259,7 +259,7 @@ PublishBR(party, height) ==
         IN
             /\ published_ct = {}                   \* No CT is confirmed on chain yet
             /\ mempool_ct # {}                     \* Only if some CT has been published
-            /\ in_mempool.party = OtherParty(party)        \* CT was broadcastt by the other party
+            /\ in_mempool.party = OtherParty(party)        \* CT was broadcast by the other party
             /\ in_mempool.index < MaxIndex(cts)            \* Revoked CT was broadcast
             /\ height - in_mempool.index < CSV             \* Can only publish BR if CSV hasn't expired
             \* Record which index was published at what height

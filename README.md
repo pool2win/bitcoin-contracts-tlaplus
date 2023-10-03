@@ -1,21 +1,27 @@
 
+** Read [Notes on lighting contracts](./lightning-contracts-notes.md) **
+
 # Bitcoin layer two contracts and communication protocols in TLA+
 
 
 ## Problem
 
-Layer 2 contracts for bitcoin are hard to reason about. Capturing
-complex protocols in TLA+ helps us think about the various edge and
-corner cases without dealing with complicated programming language
-issues.
+Layer 2 contracts for bitcoin are hard to reason about. Often times it
+comes down to writing contracts in code and then running
+simulations. However, simulations are expensive to write and it is
+even harder to cover all the corner cases.
 
 ## Goals
+
+Capture L2 protocols in TLA+ to helps us think about the the
+behaviours these contracts support, as well as explore corner cases
+without dealing with complicated programming language issues.
 
 There are two simple goals of this repo:
 
 1. Provide basis to capture layer 2 contracts in TLA+.
-2. Also exercise the communication protocols required to implement
-   layer 2 contracts - this can have some dependencies on 1.
+2. Exercise the communication protocols required to implement layer 2
+   contracts - this can have some dependencies on 1.
 
 To develop the above two we start with lightning network. By using the
 above two to capture behaviours of LN contracts we can state the
@@ -23,6 +29,16 @@ project's goals have been achieved.
 
 
 ## Progress
+
+#### October 2023
+
+#### Lightning contracts
+
+Add even the initial commitment transactions, offending and breach
+remedy transactions makes the behaviour of these transactions
+clear. This was especially made much clearer when adding liveness
+properties. I am capturing notes on lightning contracts
+[here](lightning-contracts-notes.md).
 
 ### September 2023
 
