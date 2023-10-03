@@ -37,7 +37,6 @@ EXTENDS Integers,
 
 CONSTANTS
     CSV,            \* The csv value to use in contracts
-    Height,         \* The height up to which we run the spec
     InitialBalance  \* Initial balances for alice and bob
 
 -----------------------------------------------------------------------------
@@ -101,6 +100,8 @@ OnChainTx == [party |-> Party,
               index |-> Int,
               height |-> Int]
 
+NoSpendHeight == -1
+
 -----------------------------------------------------------------------------
 
 VARIABLES
@@ -110,10 +111,11 @@ VARIABLES
     bob_brs,        \* Breach remedy transactions for bob
     mempool,     \* The CT txs that have been broadcasted.
     published,   \* The CT that has been included in a block and confirmed.
-    index
-       
+    index,
+    chain_height
 
-vars == <<alice_cts, bob_cts, alice_brs, bob_brs, mempool, published, index>>
+vars == <<alice_cts, bob_cts, alice_brs, bob_brs, mempool, published,
+          chain_height, index>>
 
 (***************************************************************************)
 (* Helper function to get other party                                      *)
@@ -124,7 +126,8 @@ OtherParty(party) == CHOOSE p \in Party: p # party
 (* Create a commitment transaction given the party, index and key to use.  *)
 (***************************************************************************)
 CreateCT(party, i, key_num, balance) ==
-        [index |-> i,
+        [party |-> party,
+         index |-> i,
          multisig |-> <<party, OtherParty(party), CSV>>,
          pk |-> <<party, key_num>>,
          local_sig |-> NoSig,
@@ -133,8 +136,9 @@ CreateCT(party, i, key_num, balance) ==
 
 CreateOnChainTx(party, ix, height) ==
         [party |-> party,
-         index |-> ix,
-         height |-> height]
+         height |-> height,
+          index |-> ix]
+
 
 Init ==
     \* Balanced channel to start with
@@ -145,9 +149,11 @@ Init ==
     /\ mempool = {}
     /\ published = {}
     /\ index = 1
+    /\ chain_height = 1 \* The genesis block is the FT
 
 TypeInvariant ==
-        /\ \A ct \in alice_cts \cup bob_cts:
+        /\ \A ct \in alice_cts \cup bob_cts \cup mempool:
+            /\ ct.party \in Party
             /\ ct.index \in Nat
             /\ ct.local_sig \in Sig \cup {NoSig}
             /\ ct.remote_sig \in Sig \cup {NoSig}
@@ -156,14 +162,10 @@ TypeInvariant ==
         /\ \A br \in alice_brs \cup bob_brs:
             /\ br.index \in Nat
             /\ br.pk \in P2WKH
-        /\ \A p \in mempool:
-             /\ p.party \in Party
-             /\ p.index \in Int
-             /\ p.height \in 0..Height
         /\ \A p \in published:
              /\ p.party \in Party
              /\ p.index \in Int
-             /\ p.height \in 0..Height
+             /\ p.height \in Int
         /\ index \in Nat
 
 -----------------------------------------------------------------------------
@@ -211,34 +213,48 @@ SupersedeCommitmentTx(delta) ==
             /\ bob_brs' = bob_brs \cup
                     {[index |-> index, pk |-> <<"alice", key_index>>]}
             /\ index' = index + 1
-    /\ UNCHANGED <<mempool, published>>
+    /\ UNCHANGED <<mempool, published, chain_height>>
 
 (***************************************************************************)
-(* Publish a commitment transaction to the blockchain.  The commitment is  *)
-(* first signed.  The protocol allows all commitments to be published,     *)
+(* Broadcast a commitment transaction to the blockchain.  The commitment   *)
+(* is first signed.  The protocol allows all commitments to be broadcast,  *)
 (* what happens next depends on the status of the commitment transaction.  *)
 (*                                                                         *)
-(* If the tx is the latest commitment transaction it is succesfuly spend.  *)
+(* If the tx is the latest commitment transaction it can be spent later.   *)
 (*                                                                         *)
 (* If not, it gives the other party a chance to spend the breach remedy    *)
 (* tx.                                                                     *)
 (*                                                                         *)
-(* TODO: We only spec CSV (self) commitment transaction. We need to handle *)
-(* the non-CSV output being published and co-op closes.                    *)
+(* TODO: We only spec CSV (self) commitment transaction.  We need to       *)
+(* handle the non-CSV output being published and co-op closes.             *)
 (***************************************************************************)
-BroadcastCommitment(party, height) ==
+BroadcastCommitment(party) ==
     /\ alice_cts # {}
     /\ bob_cts # {}
     /\
         LET
-            i == AnyCT.index
-            tx == CreateOnChainTx(party, i, height)
+            cts == IF party = "alice" THEN alice_cts ELSE bob_cts
+            ct == CHOOSE ct \in cts: TRUE
         IN
-            /\ tx \notin mempool
-            /\ tx \notin published
-            /\ mempool' = mempool \cup {tx}
+            /\ ct \notin mempool
+            /\ mempool' = mempool \cup {ct}
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
-                    published, index>>
+                    published, index, chain_height>>
+
+(***************************************************************************)
+(* Publish any transaction from mempool - this indeed is sparta.  Any      *)
+(* mempool tx can be confirmed.  So we model just that.  The only rule is  *)
+(* to make sure the CSV has expired, and that is handled at the time of    *)
+(* inserting the tx into mempool                                           *)
+(***************************************************************************)
+ConfirmMempoolTx ==
+    \E tx \in mempool:
+        /\ chain_height' = chain_height + 1
+        /\ published' = published \cup
+                {CreateOnChainTx(tx.party, tx.index, chain_height')}
+        /\ mempool' = mempool \ {tx}
+        /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
+                        index>>
 
 (***************************************************************************)
 (* Publish a breach remedy transaction in response to a commitment         *)
@@ -252,32 +268,36 @@ BroadcastCommitment(party, height) ==
 (* TODO: We skip the BR going through the mempool and confirm it           *)
 (* immediately.  This can be improved too.                                 *)
 (***************************************************************************)
-PublishBR(party, height) ==
+BroadcastBR(party) ==
     /\
         LET
             cts == IF party = "alice" THEN alice_cts ELSE bob_cts
         IN
             \E in_mempool \in mempool:
-                /\ published = {}                   \* No CT is confirmed on chain yet
-                /\ in_mempool.party = OtherParty(party)    \* CT was broadcast by the other party
-                /\ in_mempool.index < MaxIndex(cts)        \* Revoked CT was broadcast
-                /\ height - in_mempool.index < CSV         \* CSV hasn't expired
-                \* Record which index was published at what height
-                /\ published' = published \cup
-                                    {CreateOnChainTx(party, in_mempool.index, height)}
+                \* CT was broadcast by the other party
+                /\ in_mempool.party = OtherParty(party)
+                \* Revoked CT was broadcast
+                /\ in_mempool.index < MaxIndex(cts)
+                \* `party` already signed the ct as remote sig
+                /\ in_mempool.remote_sig[1] = party
+                \* CSV hasn't expired - given FT is at height 1
+                /\ chain_height < CSV
+                /\ mempool' = mempool \cup {in_mempool}
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
-                    mempool, index>>
+                    mempool, index, published, chain_height>>
 
  
 Next ==
     \/ \E d \in {-1, 1}: SupersedeCommitmentTx(d)
-    \/ \E p \in Party, h \in 0..Height: BroadcastCommitment(p, h)
-    \/ \E p \in Party, h \in 0..Height: PublishBR(p, h)
+    \/ \E p \in Party: BroadcastCommitment(p)
+    \/ \E p \in Party: BroadcastBR(p)
+    \/ ConfirmMempoolTx
 
 Spec == Init /\ [][Next]_<<vars>>
 
-Liveness == \E p \in Party, h \in 0..Height:
-                    WF_vars(PublishBR(p, h))
+\*Liveness == \E p \in Party, d \in {-1, 1}:
+\*                    WF_vars(PublishBR(p) \/ SupersedeCommitmentTx(d))
+Liveness == WF_vars(ConfirmMempoolTx)
 
 FairSpec == Spec /\ Liveness
 
