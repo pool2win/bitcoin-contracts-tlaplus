@@ -241,7 +241,7 @@ BroadcastCommitment(party) ==
                     published, index, chain_height>>
 
 (***************************************************************************)
-(* Publish any transaction from mempool - this indeed is sparta.  Any      *)
+(* Confirm any transaction from mempool - this indeed is sparta.  Any      *)
 (* mempool tx can be confirmed.  So we model just that.  The only rule is  *)
 (* to make sure the CSV has expired, and that is handled at the time of    *)
 (* inserting the tx into mempool                                           *)
@@ -256,16 +256,10 @@ ConfirmMempoolTx ==
                     index>>
 
 (***************************************************************************)
-(* Publish a breach remedy transaction in response to a commitment         *)
+(* Broadcast a breach remedy transaction in response to a commitment       *)
 (* transaction.                                                            *)
 (*                                                                         *)
-(* party is publishing the breach remedy tx when it is on index CT, and    *)
-(* the chain is on height.                                                 *)
-(*                                                                         *)
-(* This tx is immediately published on chain.                              *)
-(*                                                                         *)
-(* TODO: We skip the BR going through the mempool and confirm it           *)
-(* immediately.  This can be improved too.                                 *)
+(* party is broadcasting the tx                                            *)
 (***************************************************************************)
 BroadcastBR(party) ==
     /\
