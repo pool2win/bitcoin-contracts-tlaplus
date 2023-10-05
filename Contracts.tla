@@ -12,7 +12,7 @@
 (*                                                                         *)
 (* We also do not deal with the communication protocol between nodes for   *)
 (* creating and updating commitment transactions.  This spec will only     *)
-(* focuss on the various commitment transaction and their lifecycle in     *)
+(* focus on the various commitment transaction and their lifecycle in      *)
 (* response to interaction between parties and the blockchain.             *)
 (*                                                                         *)
 (* We ignore the details of how transactions are signed and just mark      *)
@@ -62,45 +62,39 @@ Key == {<<p, k>>: p \in Party, k \in 0..NumKey}
 NoCSV == CHOOSE c : c \notin 0..CSV
 
 (***************************************************************************)
-(* Multisig outputs without CSV encumberance                               *)
+(* Abstract out all outputs as meant to be spent by a party, is it signed  *)
+(* by party and other party.                                               *)
 (***************************************************************************)
-MultiSig == Party \X Party \X {NoCSV}
+Output == [type: {"multisig", "p2wkh"},
+           party: Party,
+           csv: {CSV} \cup {NoCSV},
+           amount: 0..InitialBalance*2] \* All the balance can be on one side
 
-(***************************************************************************)
-(* Multisig outputs with CSV encumberance                                  *)
-(***************************************************************************)
-MultiSigWithCSV == Party \X Party \X {CSV}
+CreateRSMCOutput(party, amount) ==
+    [type |-> "multisig",
+     party |-> party,
+     csv |-> CSV,
+     amount |-> amount]
 
-(***************************************************************************)
-(* P2WKH outputs, without encumbrance                                      *)
-(***************************************************************************)
-P2WKH == Key
-
-(***************************************************************************)
-(* Set of all signatures for all commit txs.  The signature in real world  *)
-(* is related to the commit transaction.  However, we leave out this       *)
-(* complication of how the signature is generated.  If there is a          *)
-(* signature by a key on a tx, it is assumed it is correctly signed as per *)
-(* bitcoin's requirements                                                  *)
-(***************************************************************************)
-Sig == {<<p, k>>: p \in Party, k \in 0..NumKey - 1}
-
-(***************************************************************************)
-(* Value to capture unsigned transactions                                  *)
-(***************************************************************************)
-NoSig == CHOOSE s : s \notin Sig
-
-CT == [index |-> Int,
-       multisig |-> MultiSigWithCSV, pk |-> P2WKH,
-       local_sig |-> Sig \cup {NoSig},
-       remote_sig |-> Sig \cup {NoSig},
-       balance |-> 0..InitialBalance]
-
-OnChainTx == [party |-> Party,
-              index |-> Int,
-              height |-> Int]
+CreatePKOutput(party, amount) ==
+    [type |-> "p2wkh",
+     party |-> party,
+     csv |-> NoCSV,
+     amount |-> amount]
 
 NoSpendHeight == -1
+
+(***************************************************************************)
+(* Transaction record.                                                     *)
+(*                                                                         *)
+(* TODO: Track output being spent.                                         *)
+(***************************************************************************)
+Tx == [party: Party,
+      index: Int,
+      height: Int,
+      outputs: Seq(Output),
+      party_signed: BOOLEAN,
+      other_party_signed: BOOLEAN]
 
 -----------------------------------------------------------------------------
 
@@ -109,8 +103,8 @@ VARIABLES
     bob_cts,        \* Commitment tx for bob
     alice_brs,      \* Breach remedy transactions for alice
     bob_brs,        \* Breach remedy transactions for bob
-    mempool,     \* The CT txs that have been broadcasted.
-    published,   \* The CT that has been included in a block and confirmed.
+    mempool,        \* The CT txs that have been broadcasted.
+    published,      \* The CT that has been included in a block and confirmed.
     index,
     chain_height
 
@@ -125,56 +119,55 @@ OtherParty(party) == CHOOSE p \in Party: p # party
 (***************************************************************************)
 (* Create a commitment transaction given the party, index and key to use.  *)
 (***************************************************************************)
-CreateCT(party, i, key_num, balance) ==
+CreateCT(party, i, key_num, amount, other_amount) ==
         [party |-> party,
          index |-> i,
-         multisig |-> <<party, OtherParty(party), CSV>>,
-         pk |-> <<party, key_num>>,
-         local_sig |-> NoSig,
-         remote_sig |-> <<OtherParty(party), key_num>>,
-         balance |-> balance]
+         height |-> NoSpendHeight,
+         outputs |-> <<CreateRSMCOutput(party, amount),
+                      CreatePKOutput(OtherParty(party), other_amount)>>,
+        party_signed |-> FALSE,
+        other_party_signed |-> TRUE]
 
-CreateOnChainTx(party, ix, height) ==
+(***************************************************************************)
+(* Breach remedy transactions are handled as presigned transactions        *)
+(* instead of by passing private keys around.  This is different from the  *)
+(* LN paper.                                                               *)
+(***************************************************************************)
+CreateBR(party, i, amount) ==
         [party |-> party,
-         height |-> height,
-          index |-> ix]
-
+         index |-> i,
+         height |-> NoSpendHeight,
+         outputs |-> <<CreatePKOutput(OtherParty(party), amount)>>,
+         party_signed |-> TRUE,
+         other_party_signed |-> FALSE]
 
 Init ==
     \* Balanced channel to start with
-    /\ alice_cts = {CreateCT("alice", 0, 0, InitialBalance)}
-    /\ bob_cts = {CreateCT("bob", 0, 0, InitialBalance)}
-    /\ alice_brs = {}
-    /\ bob_brs = {}
+    /\ alice_cts = {CreateCT("alice", 0, 0, InitialBalance, 0)}
+    /\ bob_cts = {CreateCT("bob", 0, 0, 0, InitialBalance)}
+    /\ alice_brs = {CreateBR("alice", 0, InitialBalance)}
+    /\ bob_brs = {CreateBR("bob", 0, InitialBalance)}
     /\ mempool = {}
     /\ published = {}
     /\ index = 1
     /\ chain_height = 1 \* The genesis block is the FT
 
 TypeInvariant ==
-        /\ \A ct \in alice_cts \cup bob_cts \cup mempool:
-            /\ ct.party \in Party
-            /\ ct.index \in Nat
-            /\ ct.local_sig \in Sig \cup {NoSig}
-            /\ ct.remote_sig \in Sig \cup {NoSig}
-            /\ ct.pk \in P2WKH
-            /\ ct.multisig \in MultiSigWithCSV
-        /\ \A br \in alice_brs \cup bob_brs:
-            /\ br.index \in Nat
-            /\ br.pk \in P2WKH
-        /\ \A p \in published:
-             /\ p.party \in Party
-             /\ p.index \in Int
-             /\ p.height \in Int
-        /\ index \in Nat
+    /\ index \in Nat
+    /\ alice_cts \in SUBSET Tx
+    /\ bob_cts \in SUBSET Tx
+    /\ alice_brs \in SUBSET Tx
+    /\ bob_brs \in SUBSET Tx
+    /\ mempool \in SUBSET Tx
+    /\ published \in SUBSET Tx
 
 -----------------------------------------------------------------------------
 
-MaxIndex(party_cts) ==
-    (CHOOSE x \in party_cts: \A y \in party_cts: x.index >= y.index).index
-
 LastCT(party_cts) ==
     CHOOSE ct \in party_cts: \A y \in party_cts: ct.index >= y.index
+
+MaxIndex(party_cts) ==
+    (LastCT(party_cts)).index
 
 AnyCT == (CHOOSE ct \in alice_cts \cup bob_cts: TRUE)
 
@@ -194,24 +187,26 @@ AnyCT == (CHOOSE ct \in alice_cts \cup bob_cts: TRUE)
 SupersedeCommitmentTx(delta) ==
     /\
         LET
-            key_index == 1
+            key_index == 1 \* TODO, manage key numbers
             last_alice_ct == LastCT(alice_cts)
             last_bob_ct == LastCT(bob_cts)
         IN
             \* Create CTs till channel is not closed
             /\ published = {}
-            /\ last_alice_ct.balance + delta > 0
-            /\ last_bob_ct.balance - delta > 0
+            /\ last_alice_ct.outputs[1].amount - delta > 0
+            /\ last_alice_ct.outputs[2].amount + delta <= InitialBalance
             /\ alice_cts' = alice_cts \cup
                     {CreateCT("alice", index, key_index,
-                        last_alice_ct.balance + delta)}
+                        last_alice_ct.outputs[1].amount - delta,
+                        last_alice_ct.outputs[2].amount + delta)}
             /\ bob_cts' = bob_cts \cup
                     {CreateCT("bob", index, key_index,
-                        last_alice_ct.balance - delta)}
+                        last_bob_ct.outputs[1].amount + delta,
+                        last_bob_ct.outputs[2].amount - delta)}
             /\ alice_brs' = alice_brs \cup
-                    {[index |-> index, pk |-> <<"bob", key_index>>]}
+                        {CreateBR("alice", index, last_alice_ct.outputs[1].amount)}
             /\ bob_brs' = bob_brs \cup
-                    {[index |-> index, pk |-> <<"alice", key_index>>]}
+                        {CreateBR("bob", index, last_alice_ct.outputs[1].amount)}
             /\ index' = index + 1
     /\ UNCHANGED <<mempool, published, chain_height>>
 
@@ -233,10 +228,14 @@ BroadcastCommitment(party) ==
     /\ bob_cts # {}
     /\
         LET
+            key_index == 1 \* TODO, manage key numbers
             cts == IF party = "alice" THEN alice_cts ELSE bob_cts
             ct == CHOOSE ct \in cts: TRUE
         IN
+            \* The commitment is not already in mempool
             /\ ct \notin mempool
+            \* No commitment has already been confirmed
+            /\ published = {}
             /\ mempool' = mempool \cup {ct}
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
                     published, index, chain_height>>
@@ -249,12 +248,12 @@ BroadcastCommitment(party) ==
 (***************************************************************************)
 ConfirmMempoolTx ==
     \E tx \in mempool:
-        /\ chain_height' = chain_height + 1
-        /\ published' = published \cup
-                {CreateOnChainTx(tx.party, tx.index, chain_height')}
+        /\ tx \notin published               \* Tx is not already confirmed
         /\ mempool' = mempool \ {tx}
+        /\ chain_height' = chain_height + 1
+        /\ published' = published \cup {[tx EXCEPT !.height = chain_height']}
         /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
-                        index>>
+                    index>>
 
 (***************************************************************************)
 (* Publish a breach remedy transaction in response to a commitment         *)
@@ -272,23 +271,24 @@ BroadcastBR(party) ==
     /\
         LET
             cts == IF party = "alice" THEN alice_cts ELSE bob_cts
+            brs == IF party = "alice" THEN bob_brs ELSE alice_brs
         IN
             \E in_mempool \in mempool:
                 \* CT was broadcast by the other party
-                /\ in_mempool.party = OtherParty(party)
+                /\ in_mempool.outputs[1].party = OtherParty(party)
                 \* Revoked CT was broadcast
                 /\ in_mempool.index < MaxIndex(cts)
-                \* `party` already signed the ct as remote sig
-                /\ in_mempool.remote_sig[1] = party
+                \* This party already signed the ct as local sig
+                /\ in_mempool.other_party_signed = TRUE
                 \* CSV hasn't expired - given FT is at height 1
                 /\ chain_height < CSV
-                /\ mempool' = mempool \cup {in_mempool}
+                /\ mempool' = mempool \cup {CHOOSE b \in brs: b.index = in_mempool.index}
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
-                    mempool, index, published, chain_height>>
+                    index, published, chain_height>>
 
  
 Next ==
-    \/ \E d \in {-1, 1}: SupersedeCommitmentTx(d)
+    \/ \E d \in 1..2: SupersedeCommitmentTx(d)
     \/ \E p \in Party: BroadcastCommitment(p)
     \/ \E p \in Party: BroadcastBR(p)
     \/ ConfirmMempoolTx
@@ -297,8 +297,10 @@ Spec == Init /\ [][Next]_<<vars>>
 
 \*Liveness == \E p \in Party, d \in {-1, 1}:
 \*                    WF_vars(PublishBR(p) \/ SupersedeCommitmentTx(d))
-Liveness == WF_vars(ConfirmMempoolTx)
+Liveness == \E d \in {1}: WF_vars(SupersedeCommitmentTx(d))
 
 FairSpec == Spec /\ Liveness
+
+\* TODO - Add BalanceInvariant: Sum of all amounts on all txs = InitialBalance
 
 =============================================================================
