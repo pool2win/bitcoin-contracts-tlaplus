@@ -289,9 +289,7 @@ Next ==
 
 Spec == Init /\ [][Next]_<<vars>>
 
-\*Liveness == \E p \in Party, d \in {-1, 1}:
-\*                    WF_vars(PublishBR(p) \/ SupersedeCommitmentTx(d))
-Liveness == \E d \in {1}: WF_vars(SupersedeCommitmentTx(d))
+Liveness == \E p \in Party: WF_vars(BroadcastBR(p))
 
 FairSpec == Spec /\ Liveness
 
