@@ -34,11 +34,26 @@ project's goals have been achieved.
 
 #### Lightning contracts
 
-Add even the initial commitment transactions, offending and breach
-remedy transactions makes the behaviour of these transactions
-clear. This was especially made much clearer when adding liveness
-properties. I am capturing notes on lightning contracts
+Added the initial commitment, superseding, offending and breach remedy
+transactions. Added liveness properties for breach remedy
+transactions. I am capturing notes on lightning contracts
 [here](lightning-contracts-notes.md).
+
+#### Moving Bitcoin Txs out of Contracts.tla
+
+It will be nice to separate out bitcoin actions and variables in to a
+separate module.
+
+Working on LN Contracts showed how we can move some of the Bitcoin
+related actions into a separate module. For example, the mempool,
+published, chain_height and Broadcast*Tx can move to a Bitcoin
+module.
+
+We kind of knew it would make sense but working LN contracts makes
+things much cleaner in terms of what we want to model. For example, we
+don't need to model all the Script opcodes, instead, we allow
+modelling of how a tx can be spent. We can also incorporate sighash
+rules without actually implementing the nitty gritty of it all.
 
 ### September 2023
 

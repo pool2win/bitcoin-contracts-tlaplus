@@ -1,4 +1,14 @@
 
+# Separating Bitcoin from LN Contracts
+
+For the work up till now, I have some more clarity on which actions
+can be moved to the environment. In our case, the environment is the
+bitcoin blockchain. For example, the actions like BroadcastCommitment
+and ConfirmTx can be moved to be properties of the environment. This
+will simplify the spec of LN contracts and will allow tackling other
+layer two protocols.
+
+
 # Notes on Liveness
 
 ## Supersede commitment (No fairness)
