@@ -41,6 +41,10 @@ CONSTANTS
 
 -----------------------------------------------------------------------------
 
+SeqToSet(s) == {s[i] : i \in DOMAIN s}
+
+-----------------------------------------------------------------------------
+
 (***************************************************************************)
 (* Current channel contracts only ever have two parties                    *)
 (***************************************************************************)
@@ -65,10 +69,19 @@ NoCSV == CHOOSE c : c \notin 0..CSV
 (* Abstract out all outputs as meant to be spent by a party, is it signed  *)
 (* by party and other party.                                               *)
 (***************************************************************************)
-Output == [type: {"multisig", "p2wkh"},
-           party: Party,
+Output == [party: Party,
+           type: {"multisig", "p2wkh"},
            csv: {CSV} \cup {NoCSV},
            amount: 0..InitialBalance*2] \* All the balance can be on one side
+
+(***************************************************************************)
+(* Multisig with no csv encumberance                                       *)
+(***************************************************************************)
+CreateMultisigOutput(party, amount) ==
+    [type |-> "multisig",
+     party |-> party,
+     csv |-> NoCSV,
+     amount |-> amount]
 
 CreateRSMCOutput(party, amount) ==
     [type |-> "multisig",
@@ -85,13 +98,18 @@ CreatePKOutput(party, amount) ==
 NoSpendHeight == -1
 
 (***************************************************************************)
+(* In contrast to txids, we simlpy use the party, index tuple to find the  *)
+(* tx and the vout to get the output pointed to by the input               *)
+(***************************************************************************)
+Input == [party: Party, index: Int, vout: Int]
+
+(***************************************************************************)
 (* Transaction record.                                                     *)
-(*                                                                         *)
-(* TODO: Track output being spent.                                         *)
 (***************************************************************************)
 Tx == [party: Party,
       index: Int,
       height: Int,
+      inputs: Seq(Input),
       outputs: Seq(Output),
       party_signed: BOOLEAN,
       other_party_signed: BOOLEAN]
@@ -117,12 +135,32 @@ vars == <<alice_cts, bob_cts, alice_brs, bob_brs, mempool, published,
 OtherParty(party) == CHOOSE p \in Party: p # party
 
 (***************************************************************************)
+(* The channel funding transaction.  All commitment txs spend from the     *)
+(* output of this tx.                                                      *)
+(***************************************************************************)
+FundingTx ==
+    [party |-> "alice",                     \* Only alice is funding
+     index |-> 1,
+     height |-> 1,
+     inputs |-> <<>>,                       \* FT inputs do not matter
+     outputs |-> <<CreateMultisigOutput("alice", InitialBalance)>>,
+     party_signed |-> TRUE,
+     other_party_signed |-> TRUE
+    ]
+
+
+(***************************************************************************)
 (* Create a commitment transaction given the party, index and key to use.  *)
+(*                                                                         *)
+(* Other party hands this CT to this party, therefore it is signed by      *)
+(* other party.                                                            *)
 (***************************************************************************)
 CreateCT(party, i, key_num, amount, other_amount) ==
         [party |-> party,
          index |-> i,
          height |-> NoSpendHeight,
+         \* Input for CT is the FT multisig output (1, 1)
+         inputs |-> <<[party |-> "alice", index |-> 1, vout |-> 1]>>,
          outputs |-> <<CreateRSMCOutput(party, amount),
                       CreatePKOutput(OtherParty(party), other_amount)>>,
         party_signed |-> FALSE,
@@ -131,29 +169,36 @@ CreateCT(party, i, key_num, amount, other_amount) ==
 (***************************************************************************)
 (* Breach remedy transactions are handled as presigned transactions        *)
 (* instead of by passing private keys around.  This is different from the  *)
-(* LN paper.                                                               *)
+(* Poon-Dryja LN paper.                                                    *)
+(*                                                                         *)
+(* The party creates this tx, signs it and sends it to the other party.    *)
 (***************************************************************************)
 CreateBR(party, i, amount) ==
         [party |-> party,
          index |-> i,
          height |-> NoSpendHeight,
-         outputs |-> <<CreatePKOutput(OtherParty(party), amount)>>,
+         \* BR spend the RSMC output from the corresponding index CT.
+         inputs |-> <<[party |-> OtherParty(party), index |-> i, vout |-> 1]>>,
+         \* Spending BR output will give the balance to party
+         outputs |-> <<CreatePKOutput(party, amount)>>,
          party_signed |-> TRUE,
-         other_party_signed |-> FALSE]
+         \* The other party presigns the BR so that this party can spend it
+         \* TODO: switch to exchanging private keys for the BR instead
+         other_party_signed |-> TRUE]
 
 Init ==
     \* Balanced channel to start with
-    /\ alice_cts = {CreateCT("alice", 0, 0, InitialBalance, 0)}
-    /\ bob_cts = {CreateCT("bob", 0, 0, 0, InitialBalance)}
-    /\ alice_brs = {CreateBR("alice", 0, InitialBalance)}
-    /\ bob_brs = {CreateBR("bob", 0, InitialBalance)}
+    /\ alice_cts = {CreateCT("alice", 2, 0, InitialBalance, 0)}
+    /\ bob_cts = {CreateCT("bob", 2, 0, 0, InitialBalance)}
+    /\ alice_brs = {CreateBR("bob", 2, InitialBalance)}
+    /\ bob_brs = {CreateBR("alice", 2, 0)}      \* Bob did not add funds
     /\ mempool = {}
-    /\ published = {}
-    /\ index = 1
+    /\ published = {FundingTx}
+    /\ index = 3
     /\ chain_height = 1 \* The genesis block is the FT
 
 TypeInvariant ==
-    /\ index \in Nat
+    /\ index \in Int
     /\ alice_cts \in SUBSET Tx
     /\ bob_cts \in SUBSET Tx
     /\ alice_brs \in SUBSET Tx
@@ -187,12 +232,12 @@ AnyCT == (CHOOSE ct \in alice_cts \cup bob_cts: TRUE)
 SupersedeCommitmentTx(delta) ==
     /\
         LET
-            key_index == 1 \* TODO, manage key numbers
+            key_index == 1 \* TODO: manage key numbers
             last_alice_ct == LastCT(alice_cts)
             last_bob_ct == LastCT(bob_cts)
         IN
             \* Create CTs till channel is not closed
-            /\ published = {}
+            /\ published = {FundingTx}
             /\ last_alice_ct.outputs[1].amount - delta > 0
             /\ last_alice_ct.outputs[2].amount + delta <= InitialBalance
             /\ alice_cts' = alice_cts \cup
@@ -203,10 +248,12 @@ SupersedeCommitmentTx(delta) ==
                     {CreateCT("bob", index, key_index,
                         last_bob_ct.outputs[1].amount + delta,
                         last_bob_ct.outputs[2].amount - delta)}
+            \* Alice's gets a BR it can immediately spend when corresponding
+            \* CT is spen, and vice versa
             /\ alice_brs' = alice_brs \cup
-                        {CreateBR("alice", index, last_alice_ct.outputs[1].amount)}
-            /\ bob_brs' = bob_brs \cup
                         {CreateBR("bob", index, last_alice_ct.outputs[1].amount)}
+            /\ bob_brs' = bob_brs \cup
+                        {CreateBR("alice", index, last_bob_ct.outputs[1].amount)}
             /\ index' = index + 1
     /\ UNCHANGED <<mempool, published, chain_height>>
 
@@ -235,19 +282,22 @@ BroadcastCommitment(party) ==
             \* The commitment is not already in mempool
             /\ ct \notin mempool
             \* No commitment has already been confirmed
-            /\ published = {}
-            /\ mempool' = mempool \cup {ct}
+            /\ published = {FundingTx}
+            /\ mempool' = mempool \cup {[ct EXCEPT !.party_signed = TRUE]}
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
                     published, index, chain_height>>
 
 (***************************************************************************)
 (* Confirm any transaction from mempool - this indeed is sparta.  Any      *)
-(* mempool tx can be confirmed.  So we model just that.  The only rule is  *)
-(* to make sure the CSV has expired, and that is handled at the time of    *)
-(* inserting the tx into mempool                                           *)
+(* mempool tx can be confirmed.  So we model just that.                    *)
+(*                                                                         *)
+(* The only requirement is to make sure the CSV has expired.               *)
 (***************************************************************************)
 ConfirmMempoolTx ==
     \E tx \in mempool:
+        /\ \E o \in SeqToSet(tx.outputs):
+            \/ o.type = "multisig" /\ o.csv < chain_height \* CSV expired
+            \/ o.type = "p2wkh" /\ o.csv = NoCSV         \* Without a CSV
         /\ tx \notin published               \* Tx is not already confirmed
         /\ mempool' = mempool \ {tx}
         /\ chain_height' = chain_height + 1
@@ -261,22 +311,14 @@ ConfirmMempoolTx ==
 (*                                                                         *)
 (* party is broadcasting the tx                                            *)
 (***************************************************************************)
-BroadcastBR(party) ==
-    /\
-        LET
-            cts == IF party = "alice" THEN alice_cts ELSE bob_cts
-            brs == IF party = "alice" THEN bob_brs ELSE alice_brs
-        IN
-            \E in_mempool \in mempool:
-                \* CT was broadcast by the other party
-                /\ in_mempool.outputs[1].party = OtherParty(party)
-                \* Revoked CT was broadcast
-                /\ in_mempool.index < MaxIndex(cts)
-                \* This party already signed the ct as local sig
-                /\ in_mempool.other_party_signed = TRUE
-                \* CSV hasn't expired - given FT is at height 1
-                /\ chain_height < CSV
-                /\ mempool' = mempool \cup {CHOOSE b \in brs: b.index = in_mempool.index}
+BroadcastBR ==
+    /\ \E <<m, b>> \in mempool \X (alice_brs \cup bob_brs):
+        /\ published = {FundingTx}  \* Channel is not closed yet
+        /\ m.outputs[1].type = "multisig"
+        \* Offending tx in mempool
+        /\ chain_height - 1 < m.outputs[1].csv
+        /\ m.party = b.party
+        /\ mempool' = mempool \cup {m}
     /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
                     index, published, chain_height>>
 
@@ -284,12 +326,12 @@ BroadcastBR(party) ==
 Next ==
     \/ \E d \in 1..2: SupersedeCommitmentTx(d)
     \/ \E p \in Party: BroadcastCommitment(p)
-    \/ \E p \in Party: BroadcastBR(p)
+    \/ BroadcastBR
     \/ ConfirmMempoolTx
 
 Spec == Init /\ [][Next]_<<vars>>
 
-Liveness == \E p \in Party: WF_vars(BroadcastBR(p))
+Liveness == WF_vars(BroadcastBR)
 
 FairSpec == Spec /\ Liveness
 
