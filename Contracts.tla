@@ -36,8 +36,8 @@ EXTENDS Integers,
         FiniteSets
 
 CONSTANTS
-    CSV,            \* The csv value to use in contracts
-    InitialBalance  \* Initial balances for alice and bob
+    CSV,             \* The csv value to use in contracts
+    InitialBalance   \* Initial balances for alice and bob
 
 -----------------------------------------------------------------------------
 
@@ -117,17 +117,14 @@ Tx == [party: Party,
 -----------------------------------------------------------------------------
 
 VARIABLES
-    alice_cts,      \* Commitment tx for alice
-    bob_cts,        \* Commitment tx for bob
-    alice_brs,      \* Breach remedy transactions for alice
-    bob_brs,        \* Breach remedy transactions for bob
+    cts,            \* Commitment tx for all parties
+    brs,            \* Breach remedy transactions for all parties
     mempool,        \* The CT txs that have been broadcasted.
     published,      \* The CT that has been included in a block and confirmed.
     index,
     chain_height
 
-vars == <<alice_cts, bob_cts, alice_brs, bob_brs, mempool, published,
-          chain_height, index>>
+vars == <<cts, brs, mempool, published, chain_height, index>>
 
 (***************************************************************************)
 (* Helper function to get other party                                      *)
@@ -188,10 +185,10 @@ CreateBR(party, i, amount) ==
 
 Init ==
     \* Balanced channel to start with
-    /\ alice_cts = {CreateCT("alice", 2, 0, InitialBalance, 0)}
-    /\ bob_cts = {CreateCT("bob", 2, 0, 0, InitialBalance)}
-    /\ alice_brs = {CreateBR("bob", 2, InitialBalance)}
-    /\ bob_brs = {CreateBR("alice", 2, 0)}      \* Bob did not add funds
+    /\ cts = {CreateCT("alice", 2, 0, InitialBalance, 0),
+              CreateCT("bob", 2, 0, 0, InitialBalance)}
+    /\ brs = {CreateBR("bob", 2, InitialBalance),
+              CreateBR("alice", 2, 0)}      \* Bob did not add funds
     /\ mempool = {}
     /\ published = {FundingTx}
     /\ index = 3
@@ -199,22 +196,21 @@ Init ==
 
 TypeInvariant ==
     /\ index \in Int
-    /\ alice_cts \in SUBSET Tx
-    /\ bob_cts \in SUBSET Tx
-    /\ alice_brs \in SUBSET Tx
-    /\ bob_brs \in SUBSET Tx
+    /\ cts \in SUBSET Tx
+    /\ brs \in SUBSET Tx
     /\ mempool \in SUBSET Tx
     /\ published \in SUBSET Tx
 
 -----------------------------------------------------------------------------
 
-LastCT(party_cts) ==
-    CHOOSE ct \in party_cts: \A y \in party_cts: ct.index >= y.index
+LastCT(party) ==
+    CHOOSE ct \in cts: \A y \in cts: 
+        ct.party = party /\ ct.index >= y.index
 
 MaxIndex(party_cts) ==
     (LastCT(party_cts)).index
 
-AnyCT == (CHOOSE ct \in alice_cts \cup bob_cts: TRUE)
+AnyCT == (CHOOSE ct \in cts: TRUE)
 
 (***************************************************************************)
 (* Create commitment transaction as well as the corresponding beach remedy *)
@@ -233,27 +229,25 @@ SupersedeCommitmentTx(delta) ==
     /\
         LET
             key_index == 1 \* TODO: manage key numbers
-            last_alice_ct == LastCT(alice_cts)
-            last_bob_ct == LastCT(bob_cts)
+            last_alice_ct == LastCT("alice")
+            last_bob_ct == LastCT("bob")
         IN
             \* Create CTs till channel is not closed
             /\ published = {FundingTx}
             /\ last_alice_ct.outputs[1].amount - delta > 0
             /\ last_alice_ct.outputs[2].amount + delta <= InitialBalance
-            /\ alice_cts' = alice_cts \cup
+            /\ cts' = cts \cup
                     {CreateCT("alice", index, key_index,
                         last_alice_ct.outputs[1].amount - delta,
-                        last_alice_ct.outputs[2].amount + delta)}
-            /\ bob_cts' = bob_cts \cup
-                    {CreateCT("bob", index, key_index,
+                        last_alice_ct.outputs[2].amount + delta),
+                     CreateCT("bob", index, key_index,
                         last_bob_ct.outputs[1].amount + delta,
                         last_bob_ct.outputs[2].amount - delta)}
             \* Alice's gets a BR it can immediately spend when corresponding
             \* CT is spen, and vice versa
-            /\ alice_brs' = alice_brs \cup
-                        {CreateBR("bob", index, last_alice_ct.outputs[1].amount)}
-            /\ bob_brs' = bob_brs \cup
-                        {CreateBR("alice", index, last_bob_ct.outputs[1].amount)}
+            /\ brs' = brs \cup
+                        {CreateBR("bob", index, last_alice_ct.outputs[1].amount),
+                         CreateBR("alice", index, last_bob_ct.outputs[1].amount)}
             /\ index' = index + 1
     /\ UNCHANGED <<mempool, published, chain_height>>
 
@@ -271,12 +265,10 @@ SupersedeCommitmentTx(delta) ==
 (* handle the non-CSV output being published and co-op closes.             *)
 (***************************************************************************)
 BroadcastCommitment(party) ==
-    /\ alice_cts # {}
-    /\ bob_cts # {}
+    /\ cts # {}
     /\
         LET
             key_index == 1 \* TODO, manage key numbers
-            cts == IF party = "alice" THEN alice_cts ELSE bob_cts
             ct == CHOOSE ct \in cts: TRUE
         IN
             \* The commitment is not already in mempool
@@ -284,8 +276,7 @@ BroadcastCommitment(party) ==
             \* No commitment has already been confirmed
             /\ published = {FundingTx}
             /\ mempool' = mempool \cup {[ct EXCEPT !.party_signed = TRUE]}
-    /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
-                    published, index, chain_height>>
+    /\ UNCHANGED <<cts, brs, published, index, chain_height>>
 
 (***************************************************************************)
 (* Confirm any transaction from mempool - this indeed is sparta.  Any      *)
@@ -302,8 +293,7 @@ ConfirmMempoolTx ==
         /\ mempool' = mempool \ {tx}
         /\ chain_height' = chain_height + 1
         /\ published' = published \cup {[tx EXCEPT !.height = chain_height']}
-        /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
-                    index>>
+        /\ UNCHANGED <<cts, brs, index>>
 
 (***************************************************************************)
 (* Broadcast a breach remedy transaction in response to a commitment       *)
@@ -312,15 +302,14 @@ ConfirmMempoolTx ==
 (* party is broadcasting the tx                                            *)
 (***************************************************************************)
 BroadcastBR ==
-    /\ \E <<m, b>> \in mempool \X (alice_brs \cup bob_brs):
+    /\ \E <<m, b>> \in mempool \X brs:
         /\ published = {FundingTx}  \* Channel is not closed yet
         /\ m.outputs[1].type = "multisig"
         \* Offending tx in mempool
         /\ chain_height - 1 < m.outputs[1].csv
         /\ m.party = b.party
         /\ mempool' = mempool \cup {m}
-    /\ UNCHANGED <<alice_cts, bob_cts, alice_brs, bob_brs,
-                    index, published, chain_height>>
+    /\ UNCHANGED <<cts, brs, index, published, chain_height>>
 
  
 Next ==
