@@ -21,7 +21,8 @@
 (***************************************************************************)
 
 EXTENDS Sequences,
-        Integers
+        Integers,
+        TLC
 
 (***************************************************************************)
 (* Define constants so that we can define finite sets for inputs, outputs  *)
@@ -34,19 +35,7 @@ CONSTANTS CSV,          \* Set of CSV values
           KEY,          \* Set of all keys used for signatures
           HASH          \* Set of all hash preimages
 
-NoTxId == CHOOSE t: t \notin TXID
-
-NoHash == CHOOSE h: h \notin HASH
-
 SighashFlag == {"all", "none", "single", "anyonecanpay"}
-
-Input == [
-    tx: TXID,
-    vout: VOUT,
-    sighash_flag: SighashFlag,      \* Parts of transactions covered by signature
-    signed_by: Seq(KEY),            \* One or more keys that have signed this input
-    hash_preimage: HASH \cup {NoHash}
-]
 
 (***************************************************************************)
 (* Set of output types supported for building contracts.                   *)
@@ -57,82 +46,89 @@ Input == [
 OutputTypes == {"p2wkh", "multisig", "multisig_with_csv", "hash_lock"}
 
 NoCSV == CHOOSE c: c \notin CSV
+NoHash == CHOOSE h: h \notin HASH
+
+Input == [
+    index: VOUT,
+    sighash_flag: SighashFlag,      \* Parts of transactions covered by signature
+    signed_by: Seq(KEY),            \* One or more keys that have signed this input
+    hash_preimage: HASH
+]
 
 Output == [
+    index: VOUT,
     type: OutputTypes,
     csv: CSV \cup {NoCSV},
     hash: HASH \cup {NoHash},
     amount: AMOUNT
 ]
 
-
-Tx == [
-    id: TXID,               \* A TxID breaks circular reference with Input
-    inputs: Seq(Input),     \* Seq instead of Set cause index is used for points
-    outputs: Seq(Output)        
-]
-
 -----------------------------------------------------------------------------
 
 VARIABLES
     chain_height,
+    transactions,
     mempool,
     published
 
-vars == <<chain_height, mempool, published>>
+vars == <<chain_height, transactions, mempool, published>>
 
-Init == 
-    /\ chain_height = 1
+Init ==
+    /\ transactions = [id \in TXID |-> [inputs |-> <<>>, outputs |-> <<>>]]
+    /\ chain_height = 0
     /\ mempool = {}
     /\ published = {}
     
 TypeOK ==
-    /\ mempool \in SUBSET Tx
-    /\ published \in SUBSET Tx
+    /\ transactions \in [TXID -> [inputs: Seq(Input), outputs: Seq(Output)]]
+    /\ mempool \in SUBSET TXID
+\*    /\ published \in SUBSET Tx
 
 -----------------------------------------------------------------------------
 
 CreateP2PKHOutput(key, amount) == [
+    index |-> 0,
     type |-> "p2wkh",
     csv |-> NoCSV,
     hash |-> NoHash,
     amount |-> amount
 ]
 
-CreateCoinbaseTx(txid, key, amount) == [
-    id |-> txid,
-    inputs |-> << >>,
-    outputs |-> << CreateP2PKHOutput(key, amount) >>
-]
 -----------------------------------------------------------------------------
 
 (***************************************************************************)
 (* Add a new coinbase tx to mempool.  No verification is required here as  *)
 (* no prevout is being spent.                                              *)
 (***************************************************************************)
-AddCoinbaseToMempool(tx) ==
-    /\ tx \notin mempool
-    /\ tx \notin published
-    /\ mempool' = mempool \cup {tx}
+AddCoinbaseToMempool(id, key, amount) ==
+    /\ id \notin mempool
+    /\ id \notin published
+    /\ transactions' = [transactions EXCEPT ![id] = [inputs |-> <<>>,
+                            outputs |-> <<CreateP2PKHOutput(key, amount)>>]]
+    /\ mempool' = mempool \cup {id}
     /\ UNCHANGED <<chain_height, published>>
 
 (***************************************************************************)
 (* Confirm coinbase transaction from mempool.                              *)
 (***************************************************************************)
 ConfirmCoinbaseMempoolTx ==
-    \E tx \in mempool:
-        /\ tx.inputs = << >>        \* A coinbase tx, has no inputs.
-                                    \* We are not dealing with blocks, so we
-                                    \* ignore the block index coinbase check
-        /\ tx \notin published
-        /\ published' = published \cup {tx}
-        /\ mempool' = mempool \ {tx}
-        /\ chain_height' = chain_height + 1
+    \E id \in DOMAIN transactions:
+        /\ id \in mempool
+        /\ id \notin published
+        /\ LET tx == transactions[id]
+           IN
+            /\ tx.inputs = << >>        \* A coinbase tx, has no inputs.
+                                        \* We are not dealing with blocks, so we
+                                        \* ignore the block index coinbase check
+            /\ published' = published \cup {id}
+            /\ mempool' = mempool \ {id}
+            /\ chain_height' = chain_height + 1
+        /\ UNCHANGED <<transactions>>
 -----------------------------------------------------------------------------
 
 Next == 
     \/ \E k \in KEY, id \in TXID, a \in AMOUNT: 
-        \/ AddCoinbaseToMempool(CreateCoinbaseTx(id, k, a))
+        \/ AddCoinbaseToMempool(id, k, a)
     \/ ConfirmCoinbaseMempoolTx
 
 Spec == 
