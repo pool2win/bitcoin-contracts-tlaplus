@@ -104,27 +104,36 @@ CreateCoinbaseTx(txid, key, amount) == [
     inputs |-> << >>,
     outputs |-> << CreateP2PKHOutput(key, amount) >>
 ]
-
 -----------------------------------------------------------------------------
 
+(***************************************************************************)
+(* Add a new coinbase tx to mempool.  No verification is required here as  *)
+(* no prevout is being spent.                                              *)
+(***************************************************************************)
 AddCoinbaseToMempool(tx) ==
     /\ tx \notin mempool
     /\ tx \notin published
     /\ mempool' = mempool \cup {tx}
     /\ UNCHANGED <<chain_height, published>>
-    
-ConfirmMempoolTx ==
+
+(***************************************************************************)
+(* Confirm coinbase transaction from mempool.                              *)
+(***************************************************************************)
+ConfirmCoinbaseMempoolTx ==
     \E tx \in mempool:
+        /\ tx.inputs = << >>        \* A coinbase tx, has no inputs.
+                                    \* We are not dealing with blocks, so we
+                                    \* ignore the block index coinbase check
         /\ tx \notin published
         /\ published' = published \cup {tx}
         /\ mempool' = mempool \ {tx}
         /\ chain_height' = chain_height + 1
-
+-----------------------------------------------------------------------------
 
 Next == 
     \/ \E k \in KEY, id \in TXID, a \in AMOUNT: 
-        AddCoinbaseToMempool(CreateCoinbaseTx(id, k, a))
-    \/ ConfirmMempoolTx
+        \/ AddCoinbaseToMempool(CreateCoinbaseTx(id, k, a))
+    \/ ConfirmCoinbaseMempoolTx
 
 Spec == 
     /\ Init
