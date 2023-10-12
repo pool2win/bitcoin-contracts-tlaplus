@@ -32,6 +32,21 @@ project's goals have been achieved.
 
 #### October 2023
 
+#### Separate module for Bitcoin Transactions
+
+After working on simple dual LN channels (without HTLCs), it became
+clear how we can move the bitcoin transactions and bitcoin chain
+details into a separate module. I started on it and there is now a
+`BitcoinTransactions.tla` module where we can move the complications
+of creating, broadcasting and spending bitcoin transactions of various
+types. This change will allow us to focus only on the behaviour of
+parties when creating LN transactions in `Contracts.tla`.
+
+At the moment the BitcoinTransactions modules only has a simple
+transaction. I'll be adding multisig and htlc transaction types
+there. This way the LN contracts can extend that module and focus only
+on the LN contracts behaviours.
+
 #### Lightning contracts
 
 Added the initial commitment, superseding, offending and breach remedy
