@@ -45,9 +45,10 @@ SighashFlag == {"all", "none", "single", "anyonecanpay"}
 (* to spend it.                                                            *)
 (***************************************************************************)
 \* OutputTypes == {"p2wkh", "multisig", "multisig_with_csv", "hash_lock"}
-OutputTypes == {"p2wkh", "multisig"}
+OutputTypes == {"p2wkh", "multisig", "multisig_with_csv"}
 
 NoCSV == CHOOSE c: c \notin CSV
+MaxCSV == CHOOSE c \in CSV: \A y \in CSV: c >= y
 NoHash == CHOOSE h: h \notin HASH
 
 ChooseKey(k) == CHOOSE e \in KEY: e # k
@@ -106,6 +107,15 @@ CreateMultisigOutput(keys, amount) == [
     type |-> "multisig",
     keys |-> keys,
     csv |-> NoCSV,
+    hash |-> NoHash,
+    amount |-> amount
+]
+
+CreateMultisigWithCSVOutput(keys, amount) == [
+    index |-> 0,
+    type |-> "multisig_with_csv",
+    keys |-> keys,
+    csv |-> MaxCSV,
     hash |-> NoHash,
     amount |-> amount
 ]
@@ -181,6 +191,15 @@ CreateMultisigTx(spending, output, id, keys, amount) == [
     outputs |-> <<CreateMultisigOutput(keys, amount)>>
 ]
 
+CreateMultisigWithCSVTx(spending, output, id, keys, amount) == [
+    inputs |-> <<[txid |-> spending,
+                index |-> output.index,
+                sighash_flag |-> "all",
+                signed_by |-> output.keys,
+                hash_preimage |-> NoHash]>>,
+    outputs |-> <<CreateMultisigWithCSVOutput(keys, amount)>>
+]
+
 (***************************************************************************)
 (* Add a new transaction to mempool.                                       *)
 (*                                                                         *)
@@ -203,6 +222,8 @@ AddSpendTxToMempool(id, key, amount, input_type, output_type) ==
                                 CreateP2WKHTx(s, o, id, key, amount)
                        [](output_type = "multisig") ->
                                 CreateMultisigTx(s, o, id, <<key, ChooseKey(key)>>, amount)
+                       [](output_type = "multisig_with_csv") ->
+                                CreateMultisigWithCSVTx(s, o, id, <<key, ChooseKey(key)>>, amount)
                ]
             /\ mempool' = mempool \cup {id}
             /\ UNCHANGED <<chain_height, published>>
