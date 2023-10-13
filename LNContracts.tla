@@ -1,4 +1,4 @@
------------------------------ MODULE Contracts -----------------------------
+----------------------------- MODULE LNContracts ---------------------------
 
 (***************************************************************************)
 (* This spec captures the behaviour of commitment transactions on the two  *)
