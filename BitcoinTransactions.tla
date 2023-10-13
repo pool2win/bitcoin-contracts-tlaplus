@@ -22,7 +22,8 @@
 
 EXTENDS Sequences,
         Integers,
-        TLC
+        TLC,
+        SequencesExt
 
 (***************************************************************************)
 (* Define constants so that we can define finite sets for inputs, outputs  *)
@@ -49,17 +50,19 @@ NoCSV == CHOOSE c: c \notin CSV
 NoHash == CHOOSE h: h \notin HASH
 
 Input == [
+    txid: TXID,
     index: VOUT,
     sighash_flag: SighashFlag,      \* Parts of transactions covered by signature
     signed_by: Seq(KEY),            \* One or more keys that have signed this input
-    hash_preimage: HASH
+    hash_preimage: HASH \cup {NoHash}
 ]
 
 Output == [
     index: VOUT,
     type: OutputTypes,
-    csv: CSV \cup {NoCSV},
-    hash: HASH \cup {NoHash},
+    keys: Seq(KEY),             \* Sig from these keys is required to spend
+    csv: CSV \cup {NoCSV},      \* The CSV should have expired before spend
+    hash: HASH \cup {NoHash},   \* Pre-image required to spend
     amount: AMOUNT
 ]
 
@@ -82,13 +85,14 @@ Init ==
 TypeOK ==
     /\ transactions \in [TXID -> [inputs: Seq(Input), outputs: Seq(Output)]]
     /\ mempool \in SUBSET TXID
-\*    /\ published \in SUBSET Tx
+    /\ published \in SUBSET TXID
 
 -----------------------------------------------------------------------------
 
-CreateP2PKHOutput(key, amount) == [
+CreateP2WKHOutput(key, amount) == [
     index |-> 0,
     type |-> "p2wkh",
+    keys |-> key,
     csv |-> NoCSV,
     hash |-> NoHash,
     amount |-> amount
@@ -104,7 +108,7 @@ AddCoinbaseToMempool(id, key, amount) ==
     /\ id \notin mempool
     /\ id \notin published
     /\ transactions' = [transactions EXCEPT ![id] = [inputs |-> <<>>,
-                            outputs |-> <<CreateP2PKHOutput(key, amount)>>]]
+                            outputs |-> <<CreateP2WKHOutput(<<key>>, amount)>>]]
     /\ mempool' = mempool \cup {id}
     /\ UNCHANGED <<chain_height, published>>
 
@@ -122,13 +126,36 @@ ConfirmCoinbaseMempoolTx ==
                                         \* ignore the block index coinbase check
             /\ published' = published \cup {id}
             /\ mempool' = mempool \ {id}
-            /\ chain_height' = chain_height + 1
+            /\ chain_height' = chain_height + 1 \* Each tx is in it's own block
         /\ UNCHANGED <<transactions>>
+
+CreateP2WKHTx(spending, output, ix, id, amount) == [
+    inputs |-> <<[txid |-> spending,
+                index |-> ix,
+                sighash_flag |-> "all",
+                signed_by |-> output.keys,
+                hash_preimage |-> NoHash]>>,
+    outputs |-> <<CreateP2WKHOutput(output.keys, amount)>>
+]
+
+AddP2WKHToMempool(id, amount) ==
+    \E s \in published:
+        \E o \in ToSet(transactions[s].outputs):
+            /\ id \notin mempool
+            /\ id \notin published
+            /\ o.type = "p2wkh"
+            /\ transactions' = [transactions EXCEPT ![id] =
+                                CreateP2WKHTx(s, o, o.index, id, amount)]
+            /\ mempool' = mempool \cup {id}
+            /\ UNCHANGED <<chain_height, published>>
+
 -----------------------------------------------------------------------------
 
 Next == 
     \/ \E k \in KEY, id \in TXID, a \in AMOUNT: 
         \/ AddCoinbaseToMempool(id, k, a)
+    \/ \E id \in TXID, a \in AMOUNT:
+        AddP2WKHToMempool(id, a)
     \/ ConfirmCoinbaseMempoolTx
 
 Spec == 
