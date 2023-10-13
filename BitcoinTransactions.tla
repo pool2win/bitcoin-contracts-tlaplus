@@ -47,9 +47,10 @@ SighashFlag == {"all", "none", "single", "anyonecanpay"}
 \* OutputTypes == {"p2wkh", "multisig", "multisig_with_csv", "hash_lock"}
 OutputTypes == {"p2wkh", "multisig"}
 
-
 NoCSV == CHOOSE c: c \notin CSV
 NoHash == CHOOSE h: h \notin HASH
+
+ChooseKey(k) == CHOOSE e \in KEY: e # k
 
 Input == [
     txid: TXID,
@@ -155,8 +156,8 @@ ConfirmCoinbaseMempoolTx ==
         /\ UNCHANGED <<transactions>>
 
 (***************************************************************************)
-(* Create a p2wkh transaction spending the given output/id, and spendable  *)
-(* by the given key.                                                       *)
+(* Create a transaction spending the given output/id, and spendable by the *)
+(* given key.                                                              *)
 (***************************************************************************)
 CreateP2WKHTx(spending, output, id, key, amount) == [
     inputs |-> <<[txid |-> spending,
@@ -168,20 +169,44 @@ CreateP2WKHTx(spending, output, id, key, amount) == [
 ]
 
 (***************************************************************************)
-(* Add a p2wkh transaction to mempool.  The transaction is created and     *)
-(* added to mempool.  The transaction is constructed such that it is a     *)
-(* valid transaction.                                                      *)
+(* Create a transaction spending the given output/id, and spendable by as  *)
+(* a multisig of the given keys.                                           *)
 (***************************************************************************)
-AddSpendP2WKHToMempool(id, key, amount) ==
+CreateMultisigTx(spending, output, id, keys, amount) == [
+    inputs |-> <<[txid |-> spending,
+                index |-> output.index,
+                sighash_flag |-> "all",
+                signed_by |-> output.keys,
+                hash_preimage |-> NoHash]>>,
+    outputs |-> <<CreateMultisigOutput(keys, amount)>>
+]
+
+(***************************************************************************)
+(* Add a new transaction to mempool.                                       *)
+(*                                                                         *)
+(* The transaction is created and added to mempool.                        *)
+(*                                                                         *)
+(* The transaction is constructed such that it is a valid transaction.     *)
+(*                                                                         *)
+(* `input_type` specifies the type of published output to select to spend. *)
+(*                                                                         *)
+(* `output_type' specifies the type of new output to create.               *)
+(***************************************************************************)
+AddSpendTxToMempool(id, key, amount, input_type, output_type) ==
     \E s \in published:
         \E o \in ToSet(transactions[s].outputs):
             /\ id \notin mempool
             /\ id \notin published
-            /\ o.type = "p2wkh"                             \* Spending a p2wkh
+            /\ o.type = input_type          \* Select published tx of input_type
             /\ transactions' = [transactions EXCEPT ![id] =
-                                CreateP2WKHTx(s, o, id, key, amount)]
+                    CASE (output_type = "p2wkh") ->
+                                CreateP2WKHTx(s, o, id, key, amount)
+                       [](output_type = "multisig") ->
+                                CreateMultisigTx(s, o, id, <<key, ChooseKey(key)>>, amount)
+               ]
             /\ mempool' = mempool \cup {id}
             /\ UNCHANGED <<chain_height, published>>
+
 
 -----------------------------------------------------------------------------
 
@@ -190,8 +215,8 @@ Next ==
         \/ AddP2WKHCoinbaseToMempool(id, k, a)
     \/ \E keys \in KEY \X KEY, id \in TXID, amount \in AMOUNT:
         \/ AddMultisigCoinbaseToMempool(id, keys, amount)
-    \/ \E id \in TXID, a \in AMOUNT, k \in KEY:
-        AddSpendP2WKHToMempool(id, k, a)
+    \/ \E id \in TXID, a \in AMOUNT, k \in KEY, input_type \in OutputTypes, output_type \in OutputTypes:
+        AddSpendTxToMempool(id, k, a, input_type, output_type)
     \/ ConfirmCoinbaseMempoolTx
 
 Spec == 
