@@ -44,7 +44,9 @@ SighashFlag == {"all", "none", "single", "anyonecanpay"}
 (* Each output type will have to provide a means to verify an input trying *)
 (* to spend it.                                                            *)
 (***************************************************************************)
-OutputTypes == {"p2wkh", "multisig", "multisig_with_csv", "hash_lock"}
+\* OutputTypes == {"p2wkh", "multisig", "multisig_with_csv", "hash_lock"}
+OutputTypes == {"p2wkh", "multisig"}
+
 
 NoCSV == CHOOSE c: c \notin CSV
 NoHash == CHOOSE h: h \notin HASH
@@ -98,17 +100,40 @@ CreateP2WKHOutput(key, amount) == [
     amount |-> amount
 ]
 
+CreateMultisigOutput(keys, amount) == [
+    index |-> 0,
+    type |-> "multisig",
+    keys |-> keys,
+    csv |-> NoCSV,
+    hash |-> NoHash,
+    amount |-> amount
+]
+
 -----------------------------------------------------------------------------
 
 (***************************************************************************)
-(* Add a new coinbase tx to mempool.  No verification is required here as  *)
-(* no prevout is being spent.                                              *)
+(* Add a coinbase tx spendable with a pk.  No verification is required     *)
+(* here as no prevout is being spent.                                      *)
 (***************************************************************************)
-AddCoinbaseToMempool(id, key, amount) ==
+AddP2WKHCoinbaseToMempool(id, key, amount) ==
     /\ id \notin mempool
     /\ id \notin published
     /\ transactions' = [transactions EXCEPT ![id] = [inputs |-> <<>>,
                             outputs |-> <<CreateP2WKHOutput(<<key>>, amount)>>]]
+    /\ mempool' = mempool \cup {id}
+    /\ UNCHANGED <<chain_height, published>>
+
+(***************************************************************************)
+(* Add a coinbase tx with a multisig output spendable by signature from    *)
+(* all keys.                                                               *)
+(*                                                                         *)
+(* We don't do threshold signatures for simplicity.                        *)
+(***************************************************************************)
+AddMultisigCoinbaseToMempool(id, keys, amount) ==
+    /\ id \notin mempool
+    /\ id \notin published
+    /\ transactions' = [transactions EXCEPT ![id] = [inputs |-> <<>>,
+                            outputs |-> <<CreateMultisigOutput(keys, amount)>>]]
     /\ mempool' = mempool \cup {id}
     /\ UNCHANGED <<chain_height, published>>
 
@@ -129,23 +154,32 @@ ConfirmCoinbaseMempoolTx ==
             /\ chain_height' = chain_height + 1 \* Each tx is in it's own block
         /\ UNCHANGED <<transactions>>
 
-CreateP2WKHTx(spending, output, ix, id, amount) == [
+(***************************************************************************)
+(* Create a p2wkh transaction spending the given output/id, and spendable  *)
+(* by the given key.                                                       *)
+(***************************************************************************)
+CreateP2WKHTx(spending, output, id, key, amount) == [
     inputs |-> <<[txid |-> spending,
-                index |-> ix,
+                index |-> output.index,
                 sighash_flag |-> "all",
                 signed_by |-> output.keys,
                 hash_preimage |-> NoHash]>>,
-    outputs |-> <<CreateP2WKHOutput(output.keys, amount)>>
+    outputs |-> <<CreateP2WKHOutput(<<key>>, amount)>>
 ]
 
-AddP2WKHToMempool(id, amount) ==
+(***************************************************************************)
+(* Add a p2wkh transaction to mempool.  The transaction is created and     *)
+(* added to mempool.  The transaction is constructed such that it is a     *)
+(* valid transaction.                                                      *)
+(***************************************************************************)
+AddSpendP2WKHToMempool(id, key, amount) ==
     \E s \in published:
         \E o \in ToSet(transactions[s].outputs):
             /\ id \notin mempool
             /\ id \notin published
-            /\ o.type = "p2wkh"
+            /\ o.type = "p2wkh"                             \* Spending a p2wkh
             /\ transactions' = [transactions EXCEPT ![id] =
-                                CreateP2WKHTx(s, o, o.index, id, amount)]
+                                CreateP2WKHTx(s, o, id, key, amount)]
             /\ mempool' = mempool \cup {id}
             /\ UNCHANGED <<chain_height, published>>
 
@@ -153,9 +187,11 @@ AddP2WKHToMempool(id, amount) ==
 
 Next == 
     \/ \E k \in KEY, id \in TXID, a \in AMOUNT: 
-        \/ AddCoinbaseToMempool(id, k, a)
-    \/ \E id \in TXID, a \in AMOUNT:
-        AddP2WKHToMempool(id, a)
+        \/ AddP2WKHCoinbaseToMempool(id, k, a)
+    \/ \E keys \in KEY \X KEY, id \in TXID, amount \in AMOUNT:
+        \/ AddMultisigCoinbaseToMempool(id, keys, amount)
+    \/ \E id \in TXID, a \in AMOUNT, k \in KEY:
+        AddSpendP2WKHToMempool(id, k, a)
     \/ ConfirmCoinbaseMempoolTx
 
 Spec == 
