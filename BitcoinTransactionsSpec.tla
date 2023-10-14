@@ -4,10 +4,11 @@
 (* module.                                                                 *)
 (*                                                                         *)
 (* By moving the model and the runner here, we allow other modules like    *)
-(* LNContracts to freely use BitcoinTransactions to add models, Init       *)
-(* conditions etc.                                                         *)
+(* LNContracts to freely use BitcoinTransactions and run their own models. *)
 (***************************************************************************)
 EXTENDS BitcoinTransactions
+
+-----------------------------------------------------------------------------
 
 vars == <<chain_height, transactions, mempool, published>>
 
@@ -24,13 +25,15 @@ TypeOK ==
     
 -----------------------------------------------------------------------------
 
+ChooseKey(k) == CHOOSE e \in KEY: e # k
+
 Next == 
     \/ \E k \in KEY, id \in TXID, a \in AMOUNT: 
-        \/ AddP2WKHCoinbaseToMempool(id, k, a)
+        \/ AddP2WKHCoinbaseToMempool(id, <<k>>, a)
     \/ \E keys \in KEY \X KEY, id \in TXID, amount \in AMOUNT:
         \/ AddMultisigCoinbaseToMempool(id, keys, amount)
     \/ \E id \in TXID, a \in AMOUNT, k \in KEY, input_type \in OutputTypes, output_type \in OutputTypes:
-        AddSpendTxToMempool(id, k, a, input_type, output_type)
+        AddSpendTxToMempool(id, <<k>>, a, input_type, output_type)
     \/ ConfirmCoinbaseMempoolTx
 
 Spec == 
