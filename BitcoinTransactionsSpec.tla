@@ -16,12 +16,12 @@ Init ==
     /\ transactions = [id \in TXID |-> [inputs |-> <<>>, outputs |-> <<>>]]
     /\ chain_height = 0
     /\ mempool = {}
-    /\ published = {}
+    /\ published = [id \in TXID |-> NoSpendHeight]
     
 TypeOK ==
     /\ transactions \in [TXID -> [inputs: Seq(Input), outputs: Seq(Output)]]
     /\ mempool \in SUBSET TXID
-    /\ published \in SUBSET TXID
+    /\ published \in [TXID -> Int]
     
 -----------------------------------------------------------------------------
 

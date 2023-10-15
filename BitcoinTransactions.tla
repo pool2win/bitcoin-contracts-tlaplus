@@ -50,6 +50,7 @@ OutputTypes == {"p2wkh", "multisig", "multisig_with_csv"}
 NoCSV == CHOOSE c: c \notin CSV
 MaxCSV == CHOOSE c \in CSV: \A y \in CSV: c >= y
 NoHash == CHOOSE h: h \notin HASH
+NoSpendHeight == -1
 
 Input == [
     txid: TXID,
@@ -112,7 +113,7 @@ CreateMultisigWithCSVOutput(keys, amount) == [
 (***************************************************************************)
 AddP2WKHCoinbaseToMempool(id, keys, amount) ==
     /\ id \notin mempool
-    /\ id \notin published
+    /\ published[id] = NoSpendHeight
     /\ transactions' = [transactions EXCEPT ![id] = [inputs |-> <<>>,
                             outputs |-> <<CreateP2WKHOutput(keys, amount)>>]]
     /\ mempool' = mempool \cup {id}
@@ -126,7 +127,7 @@ AddP2WKHCoinbaseToMempool(id, keys, amount) ==
 (***************************************************************************)
 AddMultisigCoinbaseToMempool(id, keys, amount) ==
     /\ id \notin mempool
-    /\ id \notin published
+    /\ published[id] = NoSpendHeight
     /\ transactions' = [transactions EXCEPT ![id] = [inputs |-> <<>>,
                             outputs |-> <<CreateMultisigOutput(keys, amount)>>]]
     /\ mempool' = mempool \cup {id}
@@ -138,13 +139,13 @@ AddMultisigCoinbaseToMempool(id, keys, amount) ==
 ConfirmCoinbaseMempoolTx ==
     \E id \in DOMAIN transactions:
         /\ id \in mempool
-        /\ id \notin published
+        /\ published[id] = NoSpendHeight
         /\ LET tx == transactions[id]
            IN
             /\ tx.inputs = << >>        \* A coinbase tx, has no inputs.
                                         \* We are not dealing with blocks, so we
                                         \* ignore the block index coinbase check
-            /\ published' = published \cup {id}
+            /\ published' = [published EXCEPT  ![id] = chain_height]
             /\ mempool' = mempool \ {id}
             /\ chain_height' = chain_height + 1 \* Each tx is in it's own block
         /\ UNCHANGED <<transactions>>
@@ -196,20 +197,21 @@ CreateMultisigWithCSVTx(spending, output, id, output_keys, amount) == [
 (* `output_type' specifies the type of new output to create.               *)
 (***************************************************************************)
 AddSpendTxToMempool(id, output_keys, amount, input_type, output_type) ==
-    \E s \in published:
-        \E o \in ToSet(transactions[s].outputs):
-            /\ id \notin mempool
-            /\ id \notin published
-            /\ o.type = input_type          \* Select published tx of input_type
-            /\ transactions' = [transactions EXCEPT ![id] =
-                    CASE (output_type = "p2wkh") ->
-                                CreateP2WKHTx(s, o, id, output_keys, amount)
-                       [](output_type = "multisig") ->
-                                CreateMultisigTx(s, o, id, output_keys, amount)
-                       [](output_type = "multisig_with_csv") ->
-                                CreateMultisigWithCSVTx(s, o, id, output_keys, amount)
-               ]
-            /\ mempool' = mempool \cup {id}
-            /\ UNCHANGED <<chain_height, published>>
+    \E s \in DOMAIN published:
+        /\ published[s] # NoSpendHeight
+        /\
+            \E o \in ToSet(transactions[s].outputs):
+                /\ id \notin mempool
+                /\ o.type = input_type          \* Select published tx of input_type
+                /\ transactions' = [transactions EXCEPT ![id] =
+                        CASE (output_type = "p2wkh") ->
+                                    CreateP2WKHTx(s, o, id, output_keys, amount)
+                           [](output_type = "multisig") ->
+                                    CreateMultisigTx(s, o, id, output_keys, amount)
+                           [](output_type = "multisig_with_csv") ->
+                                    CreateMultisigWithCSVTx(s, o, id, output_keys, amount)
+                   ]
+                /\ mempool' = mempool \cup {id}
+                /\ UNCHANGED <<chain_height, published>>
 
 =============================================================================
