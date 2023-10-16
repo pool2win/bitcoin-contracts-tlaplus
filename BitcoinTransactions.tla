@@ -134,20 +134,17 @@ AddMultisigCoinbaseToMempool(id, keys, amount) ==
     /\ UNCHANGED <<chain_height, published>>
 
 (***************************************************************************)
-(* Confirm coinbase transaction from mempool.                              *)
+(* Confirm transaction from mempool.                              *)
 (***************************************************************************)
-ConfirmCoinbaseMempoolTx ==
+ConfirmMempoolTx ==
     \E id \in DOMAIN transactions:
         /\ id \in mempool
         /\ published[id] = NoSpendHeight
         /\ LET tx == transactions[id]
            IN
-            /\ tx.inputs = << >>        \* A coinbase tx, has no inputs.
-                                        \* We are not dealing with blocks, so we
-                                        \* ignore the block index coinbase check
-            /\ published' = [published EXCEPT  ![id] = chain_height]
-            /\ mempool' = mempool \ {id}
             /\ chain_height' = chain_height + 1 \* Each tx is in it's own block
+            /\ published' = [published EXCEPT  ![id] = chain_height']
+            /\ mempool' = mempool \ {id}
         /\ UNCHANGED <<transactions>>
 
 (***************************************************************************)

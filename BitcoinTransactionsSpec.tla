@@ -34,7 +34,7 @@ Next ==
         \/ AddMultisigCoinbaseToMempool(id, keys, amount)
     \/ \E id \in TXID, a \in AMOUNT, k \in KEY, input_type \in OutputTypes, output_type \in OutputTypes:
         AddSpendTxToMempool(id, <<k>>, a, input_type, output_type)
-    \/ ConfirmCoinbaseMempoolTx
+    \/ ConfirmMempoolTx
 
 Spec == 
     /\ Init
