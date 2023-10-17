@@ -30,8 +30,8 @@ Next ==
         \/ AddP2WKHCoinbaseToMempool(id, <<k>>, a)
     \/ \E keys \in Keys \X Keys, id \in TXID, amount \in AMOUNT:
         \/ AddMultisigCoinbaseToMempool(id, keys, amount)
-    \/ \E id \in TXID, a \in AMOUNT, k \in Keys, input_type \in OutputTypes, output_type \in OutputTypes:
-        AddSpendTxToMempool(id, <<k>>, a, input_type, output_type)
+    \/ \E id \in TXID, a \in AMOUNT, input_type \in OutputTypes, output_type \in OutputTypes:
+        AddSpendTxToMempool(id, a, input_type, output_type)
     \/  \E id \in TXID: ConfirmMempoolTx(id)
 
 Spec == 

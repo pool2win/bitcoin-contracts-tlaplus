@@ -23,7 +23,8 @@
 EXTENDS Sequences,
         Integers,
         TLC,
-        SequencesExt
+        SequencesExt,
+        FiniteSetsExt
 
 (***************************************************************************)
 (* Define constants so that we can define finite sets for inputs, outputs  *)
@@ -139,7 +140,7 @@ AddMultisigCoinbaseToMempool(id, keys, amount) ==
     /\ UNCHANGED <<chain_height, published>>
 
 (***************************************************************************)
-(* Confirm transaction from mempool.                              *)
+(* Confirm transaction from mempool.                                       *)
 (***************************************************************************)
 ConfirmMempoolTx(id) ==
     /\ id \in mempool
@@ -187,6 +188,17 @@ CreateMultisigWithCSVTx(spending, output, id, output_keys, amount) == [
 ]
 
 (***************************************************************************)
+(* Choose keys to use in outputs.  It is used by AddSpendTxToMempool.      *)
+(*                                                                         *)
+(* We expect both this expression and the AddSpendTxToMempool action to be *)
+(* provided by the layer 2 protocol spec.                                  *)
+(***************************************************************************)
+ChooseOutputKeys(output_type) ==
+    IF output_type = "p2wkh"
+    THEN SetToSeq(CHOOSE k \in kSubset(1, Keys): TRUE)
+    ELSE SetToSeq(CHOOSE k \in kSubset(2, Keys): TRUE)
+
+(***************************************************************************)
 (* Add a new transaction to mempool.                                       *)
 (*                                                                         *)
 (* The transaction is created and added to mempool.                        *)
@@ -197,7 +209,7 @@ CreateMultisigWithCSVTx(spending, output, id, output_keys, amount) == [
 (*                                                                         *)
 (* `output_type' specifies the type of new output to create.               *)
 (***************************************************************************)
-AddSpendTxToMempool(id, output_keys, amount, input_type, output_type) ==
+AddSpendTxToMempool(id, amount, input_type, output_type) ==
     \E s \in DOMAIN published:
         /\ published[s] # NoSpendHeight
         /\
@@ -206,11 +218,14 @@ AddSpendTxToMempool(id, output_keys, amount, input_type, output_type) ==
                 /\ o.type = input_type          \* Select published tx of input_type
                 /\ transactions' = [transactions EXCEPT ![id] =
                         CASE (output_type = "p2wkh") ->
-                                    CreateP2WKHTx(s, o, id, output_keys, amount)
+                                CreateP2WKHTx(s, o, id,
+                                    ChooseOutputKeys(output_type), amount)
                            [](output_type = "multisig") ->
-                                    CreateMultisigTx(s, o, id, output_keys, amount)
+                                CreateMultisigTx(s, o, id,
+                                    ChooseOutputKeys(output_type), amount)
                            [](output_type = "multisig_with_csv") ->
-                                    CreateMultisigWithCSVTx(s, o, id, output_keys, amount)
+                                CreateMultisigWithCSVTx(s, o, id,
+                                    ChooseOutputKeys(output_type), amount)
                    ]
                 /\ mempool' = mempool \cup {id}
                 /\ UNCHANGED <<chain_height, published>>
