@@ -33,7 +33,9 @@ CONSTANTS CSV,          \* Set of CSV values
           VOUT,         \* Set of vout values
           TXID,         \* Set of transaction ids
           AMOUNT,       \* Set of amounts that can be used
-          KEY,          \* Set of all keys used for signatures
+          PARTY,        \* Parties participating in the L2 protocol
+          KEY,          \* Set of keys for each party used
+                        \* in the L2 protocol
           HASH          \* Set of all hash preimages
 
 SighashFlag == {"all", "none", "single", "anyonecanpay"}
@@ -52,18 +54,21 @@ MaxCSV == CHOOSE c \in CSV: \A y \in CSV: c >= y
 NoHash == CHOOSE h: h \notin HASH
 NoSpendHeight == -1
 
+\* All keys available for use by the parties
+Keys == PARTY \X KEY
+
 Input == [
     txid: TXID,
     index: VOUT,
     sighash_flag: SighashFlag,      \* Parts of transactions covered by signature
-    signed_by: Seq(KEY),            \* One or more keys that have signed this input
+    signed_by: Seq(Keys),            \* One or more keys that have signed this input
     hash_preimage: HASH \cup {NoHash}
 ]
 
 Output == [
     index: VOUT,
     type: OutputTypes,
-    keys: Seq(KEY),             \* Sig from these keys is required to spend
+    keys: Seq(Keys),             \* Sig from these keys is required to spend
     csv: CSV \cup {NoCSV},      \* The CSV should have expired before spend
     hash: HASH \cup {NoHash},   \* Pre-image required to spend
     amount: AMOUNT
