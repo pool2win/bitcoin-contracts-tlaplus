@@ -136,16 +136,15 @@ AddMultisigCoinbaseToMempool(id, keys, amount) ==
 (***************************************************************************)
 (* Confirm transaction from mempool.                              *)
 (***************************************************************************)
-ConfirmMempoolTx ==
-    \E id \in DOMAIN transactions:
-        /\ id \in mempool
-        /\ published[id] = NoSpendHeight
-        /\ LET tx == transactions[id]
-           IN
-            /\ chain_height' = chain_height + 1 \* Each tx is in it's own block
-            /\ published' = [published EXCEPT  ![id] = chain_height']
-            /\ mempool' = mempool \ {id}
-        /\ UNCHANGED <<transactions>>
+ConfirmMempoolTx(id) ==
+    /\ id \in mempool
+    /\ published[id] = NoSpendHeight
+    /\ LET tx == transactions[id]
+       IN
+        /\ chain_height' = chain_height + 1 \* Each tx is in it's own block
+        /\ published' = [published EXCEPT  ![id] = chain_height']
+        /\ mempool' = mempool \ {id}
+    /\ UNCHANGED <<transactions>>
 
 (***************************************************************************)
 (* Create a transaction spending the given output/id, and spendable by the *)
