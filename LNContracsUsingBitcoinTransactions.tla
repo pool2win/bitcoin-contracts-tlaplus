@@ -37,7 +37,8 @@ EXTENDS Integers,
         BitcoinTransactions
 
 CONSTANTS
-    InitialBalance   \* Initial balances for alice and bob
+    INITIAL_BALANCE,    \* Initial balances for alice and bob
+    CHANNEL_PARTY       \* Channel between parties
     
 VARIABLES
     commitment_txs,         \* Commitment txs held by each party. Not yet broadcast.
@@ -49,47 +50,107 @@ SeqToSet(s) == {s[i] : i \in DOMAIN s}
 
 -----------------------------------------------------------------------------
 
-(***************************************************************************)
-(* Current channel contracts only ever have two parties                    *)
-(***************************************************************************)
-Party == {"alice", "bob"}
------------------------------------------------------------------------------
-
 vars == <<chain_height, transactions, mempool, published,
            commitment_txs, breach_remedy_txs>>
 
 Init ==
     /\ transactions = [id \in TXID |-> [inputs |-> <<>>, outputs |-> <<>>]]
-    /\ commitment_txs = [p \in Party |-> <<>> ]
-    /\ breach_remedy_txs = [p \in Party |-> <<>> ]
+    /\ commitment_txs = [p \in PARTY |-> {} ]
+    /\ breach_remedy_txs = [p \in PARTY |-> {} ]
     /\ chain_height = 0
     /\ mempool = {}
     /\ published = [id \in TXID |-> NoSpendHeight]
     
 TypeOK ==
     /\ transactions \in [TXID -> [inputs: Seq(Input), outputs: Seq(Output)]]
-    /\ commitment_txs \in [Party -> Seq(TXID) ]
-    /\ breach_remedy_txs \in [Party -> Seq(TXID) ]
+    /\ commitment_txs \in [PARTY -> SUBSET TXID ]
+    /\ breach_remedy_txs \in [PARTY -> SUBSET TXID ]
     /\ mempool \in SUBSET TXID
     /\ published \in [TXID -> Int]
-    
-    ChooseKey(k) == CHOOSE e \in KEY: e # k
 -----------------------------------------------------------------------------
 
-CreateFundingTx(id, keys, amount) ==
-    /\ AddMultisigCoinbaseToMempool(id, keys, amount)
-    /\ UNCHANGED <<commitment_txs, breach_remedy_txs>>
+(***************************************************************************)
+(* Choose keys for parties that have a channel.                            *)
+(*                                                                         *)
+(* The keys should have the same sequence number.  This becomes important  *)
+(* when parties create commitment transactions.                            *)
+(***************************************************************************)
+ChooseChannelKeys ==
+    CHOOSE <<j, k>> \in Keys \X Keys:
+        /\ {j[1], k[1]} \in CHANNEL_PARTY       \* Choose parties that have a channel
+        /\ j[2] = k[2]                          \* Choose keys with same index
 
+ChoosePartyKey(party) ==
+    CHOOSE k \in Keys: k[1] = party
+
+AllCommitmentsTxids ==
+    UNION {commitment_txs[p]: p \in PARTY}
+
+AllBreachRemedyTxids ==
+    UNION {breach_remedy_txs[p]: p \in PARTY}
+
+
+-----------------------------------------------------------------------------
+
+(***************************************************************************)
+(* Confirm a transaction in mempool.  This publishes the transaction.      *)
+(*                                                                         *)
+(* We need to add a function like IsOutputSpent(o) which checks if there   *)
+(* is any transaction in published with o as input.                        *)
+(***************************************************************************)
 ConfirmTx(id) ==
     /\ ConfirmMempoolTx(id)
     /\ UNCHANGED <<commitment_txs, breach_remedy_txs>>
+
+
+(***************************************************************************)
+(* We generate simple p2wkh transactions as inputs for funding             *)
+(* transactions                                                            *)
+(***************************************************************************)
+CreateInputsForFundingTx(id, party, amount) ==
+    /\ AddP2WKHCoinbaseToMempool(id, <<ChoosePartyKey(party)>>, amount)
+    /\ UNCHANGED <<commitment_txs, breach_remedy_txs>>
+
+(***************************************************************************
+Create funding transaction that is signed by both parties for a channel.
+ ***************************************************************************)
+CreateConfirmedFundingTxByParty(id, channel, amount) ==
+    \E o \in UnspentOutputs, p \in channel:
+        \* transaction with id not created yet
+        /\ id \notin mempool
+        /\ published[id] = NoSpendHeight
+        /\ id \notin AllCommitmentsTxids
+        /\ id \notin AllBreachRemedyTxids
+        /\ OutputOwnedByParty(o, p)
+        /\ chain_height' = chain_height + 1                 \* Each tx is in it's own block
+        /\ LET fundingTx == CreateMultisigTx(o, id, ChooseOutputKeys("multisig"), amount)
+           IN
+            /\ transactions' = [transactions EXCEPT ![id] = fundingTx]
+            /\ published' = [published EXCEPT ![id] = chain_height']
+        /\ UNCHANGED <<commitment_txs, breach_remedy_txs, mempool>>
+
+(****************************************************************************
+Create a commitment transaction for a party, sign it appropriately and
+send it to the other party.
+
+Use a published funding transaction and its output as an input to the
+commitment tx.
+****************************************************************************)
+\*CreateCommitmentTxs(aid, bid) ==
+\*    \E ftxid \in DOMAIN published:
+\*        /\ published[ftxid] # NoSpendHeight
+\*        /\ published[ftxid] < chain_height
+\*        /\ published[ftxid].outputs.type = "multisig"
     
 -----------------------------------------------------------------------------
-
 Next ==
-    \/ \E keys \in KEY \X KEY, id \in TXID, amount \in AMOUNT:
-        \/ CreateFundingTx(id, keys, amount)
+    \/ \E id \in TXID, party \in PARTY, amount \in AMOUNT:
+        \/ CreateInputsForFundingTx(id, party, amount)
     \/ \E id \in TXID: ConfirmTx(id)
+    \/ \E id \in TXID, channel \in CHANNEL_PARTY, amount \in AMOUNT:
+        \/ CreateConfirmedFundingTxByParty(id, channel, amount)
+\*    \/ \E id \in TXID: ConfirmTx(id)
+\*    \/ \E <<aid, bid>> \in TXID \X TXID: CreateCommitmentTxs(aid, bid)
 
 Spec == 
     /\ Init
