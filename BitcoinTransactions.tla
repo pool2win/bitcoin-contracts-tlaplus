@@ -157,6 +157,12 @@ ChooseOutputKeys(output_type) ==
     THEN SetToSeq(CHOOSE k \in kSubset(1, Keys): TRUE)
     ELSE SetToSeq(CHOOSE k \in kSubset(2, Keys): TRUE)
 
+(***************************************************************************)
+(* Return TRUE if the given output uses a key for the provided party       *)
+(***************************************************************************)
+OutputOwnedByParty(o, p) ==
+    p \in {k[1]: k \in ToSet(transactions[o[1]].outputs[o[2]].keys)}
+
 ConfirmedTransactions ==
     {p \in DOMAIN transactions: published[p] # NoSpendHeight}
 
