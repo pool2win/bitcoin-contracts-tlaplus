@@ -85,7 +85,7 @@ VARIABLES
 -----------------------------------------------------------------------------
 
 CreateP2WKHOutput(keys, amount) == [
-    index |-> 0,
+    index |-> 1,
     type |-> "p2wkh",
     keys |-> keys,
     csv |-> NoCSV,
@@ -94,7 +94,7 @@ CreateP2WKHOutput(keys, amount) == [
 ]
 
 CreateMultisigOutput(keys, amount) == [
-    index |-> 0,
+    index |-> 1,
     type |-> "multisig",
     keys |-> keys,
     csv |-> NoCSV,
@@ -103,13 +103,72 @@ CreateMultisigOutput(keys, amount) == [
 ]
 
 CreateMultisigWithCSVOutput(keys, amount) == [
-    index |-> 0,
+    index |-> 1,
     type |-> "multisig_with_csv",
     keys |-> keys,
     csv |-> MaxCSV,
     hash |-> NoHash,
     amount |-> amount
 ]
+
+(***************************************************************************)
+(* Create a transaction spending the given output/id, and spendable by the *)
+(* given key.                                                              *)
+(***************************************************************************)
+CreateP2WKHTx(spending_output, id, output_key, amount) == [
+    inputs |-> <<[txid |-> spending_output[1],
+                index |-> spending_output[2],
+                sighash_flag |-> "all",
+                signed_by |-> transactions[spending_output[1]].outputs[spending_output[2]].keys,
+                hash_preimage |-> NoHash]>>,
+    outputs |-> <<CreateP2WKHOutput(output_key, amount)>>
+]
+
+(***************************************************************************)
+(* Create a transaction spending the given output/id, and spendable by as  *)
+(* a multisig of the given keys.                                           *)
+(***************************************************************************)
+CreateMultisigTx(spending_output, id, output_keys, amount) == [
+    inputs |-> <<[txid |-> spending_output[1],
+                index |-> spending_output[2],
+                sighash_flag |-> "all",
+                signed_by |-> transactions[spending_output[1]].outputs[spending_output[2]].keys,
+                hash_preimage |-> NoHash]>>,
+    outputs |-> <<CreateMultisigOutput(output_keys, amount)>>
+]
+
+CreateMultisigWithCSVTx(spending_output, id, output_keys, amount) == [
+    inputs |-> <<[txid |-> spending_output[1],
+                index |-> spending_output[2],
+                sighash_flag |-> "all",
+                signed_by |-> transactions[spending_output[1]].outputs[spending_output[2]].keys,
+                hash_preimage |-> NoHash]>>,
+    outputs |-> <<CreateMultisigWithCSVOutput(output_keys, amount)>>
+]
+
+(***************************************************************************)
+(* Choose keys to use in outputs.  It is used by AddSpendTxToMempool.      *)
+(*                                                                         *)
+(* We expect both this expression and the AddSpendTxToMempool action to be *)
+(* provided by the layer 2 protocol spec.                                  *)
+(***************************************************************************)
+ChooseOutputKeys(output_type) ==
+    IF output_type = "p2wkh"
+    THEN SetToSeq(CHOOSE k \in kSubset(1, Keys): TRUE)
+    ELSE SetToSeq(CHOOSE k \in kSubset(2, Keys): TRUE)
+
+ConfirmedTransactions ==
+    {p \in DOMAIN transactions: published[p] # NoSpendHeight}
+
+AllOutputs ==
+    UNION {{txid} \X {o.index: o \in ToSet(transactions[txid].outputs)}: txid \in ConfirmedTransactions}
+
+SpentOutputs ==
+    {<<i.txid, i.index>> : i \in 
+            UNION {ToSet(transactions[txid].inputs) : txid \in ConfirmedTransactions}
+    }
+
+UnspentOutputs == AllOutputs \ SpentOutputs
 
 -----------------------------------------------------------------------------
 
@@ -153,52 +212,6 @@ ConfirmMempoolTx(id) ==
     /\ UNCHANGED <<transactions>>
 
 (***************************************************************************)
-(* Create a transaction spending the given output/id, and spendable by the *)
-(* given key.                                                              *)
-(***************************************************************************)
-CreateP2WKHTx(spending, output, id, output_key, amount) == [
-    inputs |-> <<[txid |-> spending,
-                index |-> output.index,
-                sighash_flag |-> "all",
-                signed_by |-> output.keys,
-                hash_preimage |-> NoHash]>>,
-    outputs |-> <<CreateP2WKHOutput(output_key, amount)>>
-]
-
-(***************************************************************************)
-(* Create a transaction spending the given output/id, and spendable by as  *)
-(* a multisig of the given keys.                                           *)
-(***************************************************************************)
-CreateMultisigTx(spending, output, id, output_keys, amount) == [
-    inputs |-> <<[txid |-> spending,
-                index |-> output.index,
-                sighash_flag |-> "all",
-                signed_by |-> output.keys,
-                hash_preimage |-> NoHash]>>,
-    outputs |-> <<CreateMultisigOutput(output_keys, amount)>>
-]
-
-CreateMultisigWithCSVTx(spending, output, id, output_keys, amount) == [
-    inputs |-> <<[txid |-> spending,
-                index |-> output.index,
-                sighash_flag |-> "all",
-                signed_by |-> output.keys,
-                hash_preimage |-> NoHash]>>,
-    outputs |-> <<CreateMultisigWithCSVOutput(output_keys, amount)>>
-]
-
-(***************************************************************************)
-(* Choose keys to use in outputs.  It is used by AddSpendTxToMempool.      *)
-(*                                                                         *)
-(* We expect both this expression and the AddSpendTxToMempool action to be *)
-(* provided by the layer 2 protocol spec.                                  *)
-(***************************************************************************)
-ChooseOutputKeys(output_type) ==
-    IF output_type = "p2wkh"
-    THEN SetToSeq(CHOOSE k \in kSubset(1, Keys): TRUE)
-    ELSE SetToSeq(CHOOSE k \in kSubset(2, Keys): TRUE)
-
-(***************************************************************************)
 (* Add a new transaction to mempool.                                       *)
 (*                                                                         *)
 (* The transaction is created and added to mempool.                        *)
@@ -210,24 +223,21 @@ ChooseOutputKeys(output_type) ==
 (* `output_type' specifies the type of new output to create.               *)
 (***************************************************************************)
 AddSpendTxToMempool(id, amount, input_type, output_type) ==
-    \E s \in DOMAIN published:
-        /\ published[s] # NoSpendHeight
-        /\
-            \E o \in ToSet(transactions[s].outputs):
-                /\ id \notin mempool
-                /\ o.type = input_type          \* Select published tx of input_type
-                /\ transactions' = [transactions EXCEPT ![id] =
-                        CASE (output_type = "p2wkh") ->
-                                CreateP2WKHTx(s, o, id,
-                                    ChooseOutputKeys(output_type), amount)
-                           [](output_type = "multisig") ->
-                                CreateMultisigTx(s, o, id,
-                                    ChooseOutputKeys(output_type), amount)
-                           [](output_type = "multisig_with_csv") ->
-                                CreateMultisigWithCSVTx(s, o, id,
-                                    ChooseOutputKeys(output_type), amount)
-                   ]
-                /\ mempool' = mempool \cup {id}
-                /\ UNCHANGED <<chain_height, published>>
+    \E spending_output \in UnspentOutputs:
+        /\ id \notin mempool
+        /\ transactions[spending_output[1]].outputs[spending_output[2]].type = input_type
+        /\ transactions' = [transactions EXCEPT ![id] =
+                CASE (output_type = "p2wkh") ->
+                        CreateP2WKHTx(spending_output, id,
+                            ChooseOutputKeys(output_type), amount)
+                   [](output_type = "multisig") ->
+                        CreateMultisigTx(spending_output, id,
+                            ChooseOutputKeys(output_type), amount)
+                   [](output_type = "multisig_with_csv") ->
+                        CreateMultisigWithCSVTx(spending_output, id,
+                            ChooseOutputKeys(output_type), amount)
+           ]
+        /\ mempool' = mempool \cup {id}
+        /\ UNCHANGED <<chain_height, published>>
 
 =============================================================================
