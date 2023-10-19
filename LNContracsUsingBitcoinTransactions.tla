@@ -106,15 +106,18 @@ ConfirmTx(id) ==
 (***************************************************************************)
 (* We generate simple p2wkh transactions as inputs for funding             *)
 (* transactions                                                            *)
+(*                                                                         *)
+(* Outputs both have INITIAL_BALANC * 2 so that later we can have          *)
+(* bi-directional channel with INITIAL_BALANCE                             *)
 (***************************************************************************)
-CreateInputsForFundingTx(id, party, amount) ==
-    /\ AddP2WKHCoinbaseToMempool(id, <<ChoosePartyKey(party)>>, amount)
+CreateInputsForFundingTx(id, party) ==
+    /\ AddP2WKHCoinbaseToMempool(id, <<ChoosePartyKey(party)>>, INITIAL_BALANCE * 2)
     /\ UNCHANGED <<commitment_txs, breach_remedy_txs>>
 
 (***************************************************************************
 Create funding transaction that is signed by both parties for a channel.
  ***************************************************************************)
-AddFundingTxByPartyToMempool(id, channel, amount) ==
+AddFundingTxByPartyToMempool(id, channel) ==
     \E o \in UnspentOutputs, p \in channel:
         \* transaction with id not created yet
         /\ id \notin mempool
@@ -122,7 +125,7 @@ AddFundingTxByPartyToMempool(id, channel, amount) ==
         /\ id \notin AllCommitmentsTxids
         /\ id \notin AllBreachRemedyTxids
         /\ OutputOwnedByParty(o, p)
-        /\ LET fundingTx == CreateMultisigTx(o, id, ChooseOutputKeys("multisig"), amount)
+        /\ LET fundingTx == CreateMultisigTx(o, id, ChooseOutputKeys("multisig"), INITIAL_BALANCE)
            IN
             /\ transactions' = [transactions EXCEPT ![id] = fundingTx]
             /\ mempool' = mempool \cup {id}
@@ -143,11 +146,11 @@ commitment tx.
     
 -----------------------------------------------------------------------------
 Next ==
-    \/ \E id \in TXID, party \in PARTY, amount \in AMOUNT:
-        \/ CreateInputsForFundingTx(id, party, amount)
+    \/ \E id \in TXID, party \in PARTY:
+        \/ CreateInputsForFundingTx(id, party)
     \/ \E id \in TXID: ConfirmTx(id)
-    \/ \E id \in TXID, channel \in CHANNEL_PARTY, amount \in AMOUNT:
-        \/ AddFundingTxByPartyToMempool(id, channel, amount)
+    \/ \E id \in TXID, channel \in CHANNEL_PARTY:
+        \/ AddFundingTxByPartyToMempool(id, channel)
 \*    \/ \E id \in TXID: ConfirmTx(id)
 \*    \/ \E <<aid, bid>> \in TXID \X TXID: CreateCommitmentTxs(aid, bid)
 
