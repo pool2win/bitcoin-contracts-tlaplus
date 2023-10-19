@@ -114,7 +114,7 @@ CreateInputsForFundingTx(id, party, amount) ==
 (***************************************************************************
 Create funding transaction that is signed by both parties for a channel.
  ***************************************************************************)
-CreateConfirmedFundingTxByParty(id, channel, amount) ==
+AddFundingTxByPartyToMempool(id, channel, amount) ==
     \E o \in UnspentOutputs, p \in channel:
         \* transaction with id not created yet
         /\ id \notin mempool
@@ -122,12 +122,11 @@ CreateConfirmedFundingTxByParty(id, channel, amount) ==
         /\ id \notin AllCommitmentsTxids
         /\ id \notin AllBreachRemedyTxids
         /\ OutputOwnedByParty(o, p)
-        /\ chain_height' = chain_height + 1                 \* Each tx is in it's own block
         /\ LET fundingTx == CreateMultisigTx(o, id, ChooseOutputKeys("multisig"), amount)
            IN
             /\ transactions' = [transactions EXCEPT ![id] = fundingTx]
-            /\ published' = [published EXCEPT ![id] = chain_height']
-        /\ UNCHANGED <<commitment_txs, breach_remedy_txs, mempool>>
+            /\ mempool' = mempool \cup {id}
+        /\ UNCHANGED <<commitment_txs, breach_remedy_txs, chain_height, published>>
 
 (****************************************************************************
 Create a commitment transaction for a party, sign it appropriately and
@@ -148,7 +147,7 @@ Next ==
         \/ CreateInputsForFundingTx(id, party, amount)
     \/ \E id \in TXID: ConfirmTx(id)
     \/ \E id \in TXID, channel \in CHANNEL_PARTY, amount \in AMOUNT:
-        \/ CreateConfirmedFundingTxByParty(id, channel, amount)
+        \/ AddFundingTxByPartyToMempool(id, channel, amount)
 \*    \/ \E id \in TXID: ConfirmTx(id)
 \*    \/ \E <<aid, bid>> \in TXID \X TXID: CreateCommitmentTxs(aid, bid)
 
