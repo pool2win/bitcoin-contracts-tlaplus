@@ -30,7 +30,12 @@ project's goals have been achieved.
 
 ## Progress
 
-#### October 2023
+### October 2023
+
+#### BitcoinTransactions module with Unspent Outputs
+
+Added helper functions to find unspent outputs. This came from the
+work on moving LNContracts to use the new BitcoinTransactions module.
 
 #### Separate module for Bitcoin Transactions
 
