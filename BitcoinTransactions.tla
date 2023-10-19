@@ -53,6 +53,7 @@ OutputTypes == {"p2wkh", "multisig", "multisig_with_csv"}
 NoCSV == CHOOSE c: c \notin CSV
 MaxCSV == CHOOSE c \in CSV: \A y \in CSV: c >= y
 NoHash == CHOOSE h: h \notin HASH
+NoTxid == -1
 NoSpendHeight == -1
 
 \* All keys available for use by the parties
