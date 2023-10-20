@@ -116,7 +116,7 @@ CreateMultisigWithCSVOutput(keys, amount) == [
 (* Create a transaction spending the given output/id, and spendable by the *)
 (* given key.                                                              *)
 (***************************************************************************)
-CreateP2WKHTx(spending_output, id, output_key, amount) == [
+CreateP2WKHTx(spending_output, output_key, amount) == [
     inputs |-> <<[txid |-> spending_output[1],
                 index |-> spending_output[2],
                 sighash_flag |-> "all",
@@ -129,7 +129,7 @@ CreateP2WKHTx(spending_output, id, output_key, amount) == [
 (* Create a transaction spending the given output/id, and spendable by as  *)
 (* a multisig of the given keys.                                           *)
 (***************************************************************************)
-CreateMultisigTx(spending_output, id, output_keys, amount) == [
+CreateMultisigTx(spending_output, output_keys, amount) == [
     inputs |-> <<[txid |-> spending_output[1],
                 index |-> spending_output[2],
                 sighash_flag |-> "all",
@@ -138,7 +138,16 @@ CreateMultisigTx(spending_output, id, output_keys, amount) == [
     outputs |-> <<CreateMultisigOutput(output_keys, amount)>>
 ]
 
-CreateMultisigWithCSVTx(spending_output, id, output_keys, amount) == [
+CreateUnsingedMultisigTx(spending_output, output_keys, amount) == [
+    inputs |-> <<[txid |-> spending_output[1],
+                index |-> spending_output[2],
+                sighash_flag |-> "all",
+                signed_by |-> <<>>,
+                hash_preimage |-> NoHash]>>,
+    outputs |-> <<CreateMultisigOutput(output_keys, amount)>>
+]
+
+CreateMultisigWithCSVTx(spending_output, output_keys, amount) == [
     inputs |-> <<[txid |-> spending_output[1],
                 index |-> spending_output[2],
                 sighash_flag |-> "all",
@@ -235,13 +244,13 @@ AddSpendTxToMempool(id, amount, input_type, output_type) ==
         /\ transactions[spending_output[1]].outputs[spending_output[2]].type = input_type
         /\ transactions' = [transactions EXCEPT ![id] =
                 CASE (output_type = "p2wkh") ->
-                        CreateP2WKHTx(spending_output, id,
+                        CreateP2WKHTx(spending_output,
                             ChooseOutputKeys(output_type), amount)
                    [](output_type = "multisig") ->
-                        CreateMultisigTx(spending_output, id,
+                        CreateMultisigTx(spending_output,
                             ChooseOutputKeys(output_type), amount)
                    [](output_type = "multisig_with_csv") ->
-                        CreateMultisigWithCSVTx(spending_output, id,
+                        CreateMultisigWithCSVTx(spending_output,
                             ChooseOutputKeys(output_type), amount)
            ]
         /\ mempool' = mempool \cup {id}
