@@ -138,7 +138,7 @@ CreateMultisigTx(spending_output, output_keys, amount) == [
     outputs |-> <<CreateMultisigOutput(output_keys, amount)>>
 ]
 
-CreateUnsingedMultisigTx(spending_output, output_keys, amount) == [
+CreateUnsignedMultisigTx(spending_output, output_keys, amount) == [
     inputs |-> <<[txid |-> spending_output[1],
                 index |-> spending_output[2],
                 sighash_flag |-> "all",

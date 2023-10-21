@@ -57,8 +57,8 @@ vars == <<chain_height, transactions, mempool, published,
 Init ==
     /\ transactions = [id \in TXID |-> [inputs |-> <<>>, outputs |-> <<>>]]
     /\ funding_txs = [channel \in CHANNEL_PARTY |-> NoTxid]
-    /\ commitment_txs = [p \in PARTY |-> {} ]
-    /\ breach_remedy_txs = [p \in PARTY |-> {} ]
+    /\ commitment_txs = [channel \in CHANNEL_PARTY |-> [p \in channel |-> NoTxid] ]
+    /\ breach_remedy_txs = [channel \in CHANNEL_PARTY |-> [p \in channel |-> NoTxid] ]
     /\ chain_height = 0
     /\ mempool = {}
     /\ published = [id \in TXID |-> NoSpendHeight]
@@ -66,8 +66,8 @@ Init ==
 TypeOK ==
     /\ transactions \in [TXID -> [inputs: Seq(Input), outputs: Seq(Output)]]
     /\ funding_txs \in [CHANNEL_PARTY -> TXID \cup {NoTxid} ]
-    /\ commitment_txs \in [PARTY -> SUBSET TXID ]
-    /\ breach_remedy_txs \in [PARTY -> SUBSET TXID ]
+    /\ commitment_txs \in [CHANNEL_PARTY -> [PARTY -> TXID \cup {NoTxid}] ]
+    /\ breach_remedy_txs \in [CHANNEL_PARTY -> [PARTY -> TXID \cup {NoTxid}] ]
     /\ mempool \in SUBSET TXID
     /\ published \in [TXID -> Int]
 -----------------------------------------------------------------------------
@@ -83,16 +83,32 @@ ChooseChannelKeys ==
         /\ {j[1], k[1]} \in CHANNEL_PARTY       \* Choose parties that have a channel
         /\ j[2] = k[2]                          \* Choose keys with same index
 
+ChannelKeys(channel) == SetToSeq({<<p, 1>>: p \in channel})
+
 ChoosePartyKey(party) ==
     CHOOSE k \in Keys: k[1] = party
 
 AllCommitmentsTxids ==
-    UNION {commitment_txs[p]: p \in PARTY}
+    {commitment_txs[cp[1]][cp[2]]: 
+        cp \in {<<channel_party, party>> \in CHANNEL_PARTY \X PARTY: party \in channel_party}}
+
 
 AllBreachRemedyTxids ==
-    UNION {breach_remedy_txs[p]: p \in PARTY}
+    {breach_remedy_txs[cp[1]][cp[2]]: 
+        cp \in {<<channel_party, party>> \in CHANNEL_PARTY \X PARTY: party \in channel_party}}
 
-
+(***************************************************************************)
+(* TXID id has not been used yet.                                          *)
+(*                                                                         *)
+(* TODO: We might need to rethink how we track txids, but for now, this is *)
+(* the solution.                                                           *)
+(***************************************************************************)
+IsUnused(id) ==
+    /\ id \notin mempool
+    /\ published[id] = NoSpendHeight
+    /\ id \notin AllCommitmentsTxids
+    /\ id \notin AllBreachRemedyTxids
+    
 -----------------------------------------------------------------------------
 
 (***************************************************************************)
@@ -110,55 +126,90 @@ ConfirmTx(id) ==
 (* We generate simple p2wkh transactions as inputs for funding             *)
 (* transactions                                                            *)
 (*                                                                         *)
-(* Outputs both have INITIAL_BALANC * 2 so that later we can have          *)
+(* Outputs both have INITIAL_BALANCE * 2 so that later we can have         *)
 (* bi-directional channel with INITIAL_BALANCE                             *)
 (***************************************************************************)
-CreateInputsForFundingTx(id, party) ==
-    /\ AddP2WKHCoinbaseToMempool(id, <<ChoosePartyKey(party)>>, INITIAL_BALANCE * 2)
+CreateInputsForFundingTx(id, channel) ==
+    /\ funding_txs[channel] = NoTxid        \* No funding tx for channel exists
+    /\ \E party \in channel:
+        /\ AddP2WKHCoinbaseToMempool(id, <<ChoosePartyKey(party)>>, INITIAL_BALANCE * 2)
     /\ UNCHANGED <<commitment_txs, breach_remedy_txs, funding_txs>>
 
-(***************************************************************************
-Create funding transaction that is signed by both parties for a channel
-and available to both parties.
- ***************************************************************************)
-AddFundingTxByPartyToMempool(id, channel) ==
+(***************************************************************************)
+(* Create funding transaction.  The funding tx is not locked at this       *)
+(* point.                                                                  *)
+(*                                                                         *)
+(* Once a commitment tx is signed then we can send this funding tx to the  *)
+(* mempool.                                                                *)
+(*                                                                         *)
+(* Create a funding tx only if no funding tx exists for the channel        *)
+(***************************************************************************)
+CreateFundingTxByParty(id, channel) ==
     \E o \in UnspentOutputs, p \in channel:
         \* transaction with id not created yet
-        /\ id \notin mempool
-        /\ published[id] = NoSpendHeight
-        /\ id \notin AllCommitmentsTxids
-        /\ id \notin AllBreachRemedyTxids
+        /\ IsUnused(id)
         /\ funding_txs[channel] = NoTxid    \* No funding tx exists for the channel
         /\ OutputOwnedByParty(o, p)
-        /\ LET fundingTx == CreateMultisigTx(o, id, ChooseOutputKeys("multisig"), INITIAL_BALANCE)
+        /\ LET  fundingTx == CreateUnsignedMultisigTx(o, ChannelKeys(channel), INITIAL_BALANCE)
            IN
             /\ transactions' = [transactions EXCEPT ![id] = fundingTx]
             /\ funding_txs' = [funding_txs EXCEPT ![channel] = id]
         /\ UNCHANGED <<commitment_txs, breach_remedy_txs,
                         chain_height, published, mempool>>
 
-(****************************************************************************
-Create a commitment transaction for a party, sign it appropriately and
-send it to the other party.
+(***************************************************************************
+Create a commitment tx for for a channel parties.
+ ***************************************************************************)
+CreateCommitmentTx(txid, channel, party) ==
+    \* txid is not used
+    /\ IsUnused(txid)
+    \* Funding tx for channel exists
+    /\ funding_txs[channel] # NoTxid
+    \* Commitment tx for channel and party doesn't exist
+    /\ commitment_txs[channel][party] = NoTxid
+    \* Create the commitment tx for party paying back to funder
+    /\ LET  ftx_id == funding_txs[channel]
+            ftx == transactions[ftx_id]
+            ftx_input == transactions[ftx.inputs[1].txid]
+            \* Create commitment tx, that spends ftx and creates outputs for party and other party
+            \* Use amounts based on party = funding input key holder
+            tx == CreateP2WKHTx(<<ftx_id, ftx.outputs[1].index>>,
+                                ftx_input.outputs[1].keys,
+                                ftx_input.outputs[1].amount)
+       IN
+        /\ commitment_txs' = [commitment_txs EXCEPT ![channel][party] = txid]
+        /\ transactions' = [transactions EXCEPT ![txid] = tx]
+    /\ UNCHANGED <<breach_remedy_txs, funding_txs,
+                    chain_height, published, mempool>>
 
-Use a published funding transaction and its output as an input to the
-commitment tx.
-****************************************************************************)
-\*CreateCommitmentTxs(aid, bid) ==
-\*    \E ftxid \in DOMAIN published:
-\*        /\ published[ftxid] # NoSpendHeight
-\*        /\ published[ftxid] < chain_height
-\*        /\ published[ftxid].outputs.type = "multisig"
-    
+(***************************************************************************)
+(* Add funding tx to mempool once commitment transactions have been signed *)
+(* and shared.                                                             *)
+(***************************************************************************)
+AddFundingTxToMempool(txid, channel) ==
+    LET
+        funding_txid == funding_txs[channel]
+    IN
+    /\ funding_txid # NoTxid          \* A funding tx exists
+    /\ \A p \in channel: 
+        \* There is a commitment tx for both parties    
+        /\ commitment_txs[channel][p] # NoTxid
+        \* both commitment tx spending the funding tx
+        /\ transactions[commitment_txs[channel][p]].inputs[1].txid = funding_txid
+    /\ mempool' = mempool \cup {funding_txid}
+    /\ UNCHANGED <<commitment_txs, breach_remedy_txs,
+                        chain_height, published, funding_txs, transactions>> 
 -----------------------------------------------------------------------------
 Next ==
-    \/ \E id \in TXID, party \in PARTY:
-        \/ CreateInputsForFundingTx(id, party)
+    \/ \E id \in TXID, channel \in CHANNEL_PARTY:
+        \/ CreateInputsForFundingTx(id, channel)
     \/ \E id \in TXID: ConfirmTx(id)
     \/ \E id \in TXID, channel \in CHANNEL_PARTY:
-        \/ AddFundingTxByPartyToMempool(id, channel)
-\*    \/ \E id \in TXID: ConfirmTx(id)
-\*    \/ \E <<aid, bid>> \in TXID \X TXID: CreateCommitmentTxs(aid, bid)
+        \/ CreateFundingTxByParty(id, channel)
+        \/ AddFundingTxToMempool(id, channel)
+    \/ \E channel \in CHANNEL_PARTY:
+            \E <<txid, party>> \in TXID \X channel:
+               CreateCommitmentTx(txid, channel, party)
 
 Spec == 
     /\ Init
