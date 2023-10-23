@@ -94,6 +94,15 @@ CreateP2WKHOutput(keys, amount) == [
     amount |-> amount
 ]
 
+CreateP2WKHWithCSVOutput(keys, amount) == [
+    index |-> 1,
+    type |-> "p2wkh",
+    keys |-> keys,
+    csv |-> MaxCSV,
+    hash |-> NoHash,
+    amount |-> amount
+]
+
 CreateMultisigOutput(keys, amount) == [
     index |-> 1,
     type |-> "multisig",
@@ -197,6 +206,12 @@ AddP2WKHCoinbaseToMempool(id, keys, amount) ==
     /\ published[id] = NoSpendHeight
     /\ transactions' = [transactions EXCEPT ![id] = [inputs |-> <<>>,
                             outputs |-> <<CreateP2WKHOutput(keys, amount)>>]]
+    /\ mempool' = mempool \cup {id}
+    /\ UNCHANGED <<chain_height, published>>
+
+AddTxidToMempool(id) ==
+    /\ id \notin mempool
+    /\ published[id] = NoSpendHeight
     /\ mempool' = mempool \cup {id}
     /\ UNCHANGED <<chain_height, published>>
 
