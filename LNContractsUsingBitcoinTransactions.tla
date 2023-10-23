@@ -1,4 +1,4 @@
---------------------- MODULE LNContracsUsingBitcoinTransactions ------------
+--------------------- MODULE LNContractsUsingBitcoinTransactions ------------
 
 (***************************************************************************)
 (* This spec captures the behaviour of commitment transactions on the two  *)
@@ -108,6 +108,7 @@ IsUnused(id) ==
     /\ published[id] = NoSpendHeight
     /\ id \notin AllCommitmentsTxids
     /\ id \notin AllBreachRemedyTxids
+    /\ id \notin {funding_txs[t]: t \in CHANNEL_PARTY}
     
 -----------------------------------------------------------------------------
 
@@ -157,6 +158,17 @@ CreateFundingTxByParty(id, channel) ==
         /\ UNCHANGED <<commitment_txs, breach_remedy_txs,
                         chain_height, published, mempool>>
 
+
+CreateCommitmentTxInput(ftxid, ftx) ==
+    <<[txid |-> ftxid,
+        index |-> ftx.outputs[1].index,         \* Assume we only have one output in ftx
+        sighash_flag |-> "all",
+            signed_by |-> ftx.outputs[1].keys,
+        hash_preimage |-> NoHash]>>
+
+CreateCommitmentTxOutputs ==
+    <<>>
+
 (***************************************************************************
 Create a commitment tx for for a channel parties.
  ***************************************************************************)
@@ -168,14 +180,16 @@ CreateCommitmentTx(txid, channel, party) ==
     \* Commitment tx for channel and party doesn't exist
     /\ commitment_txs[channel][party] = NoTxid
     \* Create the commitment tx for party paying back to funder
-    /\ LET  ftx_id == funding_txs[channel]
-            ftx == transactions[ftx_id]
+    /\ LET  ftxid == funding_txs[channel]
+            ftx == transactions[ftxid]
             ftx_input == transactions[ftx.inputs[1].txid]
             \* Create commitment tx, that spends ftx and creates outputs for party and other party
             \* Use amounts based on party = funding input key holder
-            tx == CreateP2WKHTx(<<ftx_id, ftx.outputs[1].index>>,
-                                ftx_input.outputs[1].keys,
-                                ftx_input.outputs[1].amount)
+            tx == [inputs |-> CreateCommitmentTxInput(ftxid, ftx),
+                outputs |-> CreateCommitmentTxOutputs]
+\*            tx == CreateP2WKHTx(<<ftxid, ftx.outputs[1].index>>,
+\*                                ftx_input.outputs[1].keys,
+\*                                ftx_input.outputs[1].amount)
        IN
         /\ commitment_txs' = [commitment_txs EXCEPT ![channel][party] = txid]
         /\ transactions' = [transactions EXCEPT ![txid] = tx]
